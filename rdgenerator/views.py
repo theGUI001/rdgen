@@ -14,18 +14,21 @@ import pyzipper
 from django.conf import settings as _settings
 from django.db.models import Q
 from .forms import GenerateForm
-from .models import GithubRun
+from .models import GithubRun, BuildBatch, BuildJob
 from PIL import Image
 from urllib.parse import quote
 
 
-def generate_custom_client(params, full_url):
+def generate_custom_client(params, full_url, engine='native'):
     """
     Core generation logic shared by web form and JSON API.
 
     Args:
         params: dict containing all configuration fields (keys match GenerateForm field names)
         full_url: the full URL of this service (protocol + host)
+        engine: 'native' dispatches the classic per-platform generator-*.yml
+                workflows; 'docker' dispatches docker-generator.yml, which runs
+                the build inside a prebuilt Docker container.
 
     Returns:
         dict with 'success' key. On success: also includes 'uuid', 'filename', 'platform', 'log_url'.
@@ -219,22 +222,23 @@ def generate_custom_client(params, full_url):
     encodedCustom = base64_bytes.decode("ascii")
 
     ####from here run the github action, we need user, repo, access token.
-    if platform == 'windows':
-        url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/generator-windows.yml/dispatches'
-        if selfhosted:
-            url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/sh-generator-windows.yml/dispatches'
-    if platform == 'windows-x86':
-        url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/generator-windows-x86.yml/dispatches'
+    workflow_base = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/'
+    if engine == 'docker':
+        # Single container-based workflow handles every platform it can build.
+        workflow_file = 'docker-generator.yml'
+    elif platform == 'windows':
+        workflow_file = 'sh-generator-windows.yml' if selfhosted else 'generator-windows.yml'
+    elif platform == 'windows-x86':
+        workflow_file = 'generator-windows-x86.yml'
     elif platform == 'linux':
-        url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/generator-linux.yml/dispatches'
+        workflow_file = 'generator-linux.yml'
     elif platform == 'android':
-        url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/generator-android.yml/dispatches'
+        workflow_file = 'generator-android.yml'
     elif platform == 'macos':
-        url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/generator-macos.yml/dispatches'
+        workflow_file = 'generator-macos.yml'
     else:
-        url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/generator-windows.yml/dispatches'
-        if selfhosted:
-            url = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/sh-generator-windows.yml/dispatches'
+        workflow_file = 'sh-generator-windows.yml' if selfhosted else 'generator-windows.yml'
+    url = workflow_base + workflow_file
 
     inputs_raw = {
         "server":server,
@@ -285,14 +289,21 @@ def generate_custom_client(params, full_url):
 
     zip_url = json.dumps(zipJson)
 
+    workflow_inputs = {
+        "version": version,
+        "zip_url": zip_url,
+    }
+    if engine == 'docker':
+        # docker-generator.yml accepts a comma list of platforms; a single call
+        # here targets one platform so per-platform status tracking still works.
+        workflow_inputs["platforms"] = platform
+        workflow_inputs["image_tag"] = getattr(_settings, 'BUILDER_IMAGE_TAG', 'latest')
+
     data = {
         "ref":_settings.GHBRANCH,
-        "inputs":{
-            "version":version,
-            "zip_url":zip_url
-        },
+        "inputs": workflow_inputs,
         "return_run_details": True
-    } 
+    }
     headers = {
         'Accept':  'application/vnd.github+json',
         'Content-Type': 'application/json',
@@ -398,6 +409,137 @@ def generator_view(request):
         form = GenerateForm()
     #return render(request, 'maintenance.html')
     return render(request, 'generator.html', {'form': form})
+
+
+# ---------------------------------------------------------------------------
+# Batch builds: schedule the same configuration across several platforms at
+# once, each running in its own Docker-based workflow run.
+# ---------------------------------------------------------------------------
+
+# Platforms the Docker engine can actually build. macOS/iOS need an Apple host.
+DOCKER_PLATFORMS = ['linux', 'windows', 'android']
+
+
+def batch_view(request):
+    """Multi-platform scheduler UI. GET renders the form; POST fans out."""
+    if request.method != 'POST':
+        form = GenerateForm()
+        return render(request, 'batch.html', {
+            'form': form,
+            'docker_platforms': DOCKER_PLATFORMS,
+        })
+
+    # A batch reuses GenerateForm for validation but ignores its single
+    # `platform` field in favour of the `platforms` multi-select.
+    form = GenerateForm(request.POST, request.FILES)
+    if not form.is_valid():
+        return render(request, 'batch.html', {
+            'form': form,
+            'docker_platforms': DOCKER_PLATFORMS,
+            'errors': form.errors,
+        })
+
+    selected = request.POST.getlist('platforms')
+    selected = [p for p in selected if p in DOCKER_PLATFORMS]
+    if not selected:
+        return render(request, 'batch.html', {
+            'form': form,
+            'docker_platforms': DOCKER_PLATFORMS,
+            'errors': {'platforms': ['Select at least one platform.']},
+        })
+
+    full_url = f"{_settings.PROTOCOL}://{request.get_host()}"
+    base_params = dict(form.cleaned_data)
+    label = request.POST.get('batch_label', '').strip()
+
+    batch = BuildBatch(
+        uuid=str(uuid.uuid4()),
+        label=label,
+        filename=base_params.get('exename', 'rustdesk'),
+        engine='docker',
+    )
+    batch.save()
+
+    for position, plat in enumerate(selected):
+        params = dict(base_params)
+        params['platform'] = plat
+        job = BuildJob(
+            batch=batch,
+            platform=plat,
+            uuid='',
+            filename=base_params.get('exename', 'rustdesk'),
+            position=position,
+        )
+        try:
+            result = generate_custom_client(params, full_url, engine='docker')
+        except Exception as e:  # never let one platform sink the whole batch
+            result = {"success": False, "error": f"dispatch error: {e}"}
+
+        if result.get('success'):
+            job.uuid = result['uuid']
+            job.status = 'in_progress'
+            job.log_url = result.get('log_url', '') or ''
+        else:
+            job.uuid = str(uuid.uuid4())
+            job.status = 'failure'
+            job.error = str(result.get('error', 'unknown error'))[:500]
+        job.save()
+
+    return render(request, 'batch_status.html', {'batch': batch})
+
+
+def _batch_payload(batch):
+    """Collect the live status of every job in a batch for the dashboard/API."""
+    jobs = []
+    done = 0
+    for job in batch.jobs.all():
+        status = job.status
+        log_url = job.log_url
+        if job.status not in ['failure', 'success', 'cancelled', 'timed_out', 'skipped']:
+            info = _get_run_status(job.uuid)
+            if info['found']:
+                status = info['status']
+                log_url = info['github_log_url']
+                if status != job.status:
+                    job.status = status
+                    job.log_url = log_url
+                    job.save(update_fields=['status', 'log_url'])
+        if status in ['failure', 'success', 'cancelled', 'timed_out', 'skipped']:
+            done += 1
+        jobs.append({
+            'platform': job.platform,
+            'uuid': job.uuid,
+            'filename': job.filename,
+            'status': status,
+            'log_url': log_url,
+            'error': job.error,
+        })
+    return {
+        'uuid': batch.uuid,
+        'label': batch.label,
+        'filename': batch.filename,
+        'jobs': jobs,
+        'total': len(jobs),
+        'completed': done,
+        'all_done': done == len(jobs) and len(jobs) > 0,
+    }
+
+
+def batch_status(request):
+    """HTML dashboard for a batch (batch=<uuid>)."""
+    batch_uuid = request.GET.get('batch')
+    batch = get_object_or_404(BuildBatch, uuid=batch_uuid)
+    return render(request, 'batch_status.html', {'batch': batch})
+
+
+def batch_status_json(request):
+    """JSON status of a batch, polled by the dashboard and usable as an API."""
+    batch_uuid = request.GET.get('batch')
+    try:
+        batch = BuildBatch.objects.get(uuid=batch_uuid)
+    except BuildBatch.DoesNotExist:
+        return JsonResponse({"error": "batch not found"}, status=404)
+    return JsonResponse(_batch_payload(batch))
 
 
 def check_for_file(request):

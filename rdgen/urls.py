@@ -26,6 +26,10 @@ else:
 urlpatterns = [
     url(r'^$',views.generator_view),
     url(r'^generator',views.generator_view),
+    # Batch (multi-platform) build scheduler
+    url(r'^batch/status_json$',views.batch_status_json),
+    url(r'^batch/status$',views.batch_status),
+    url(r'^batch',views.batch_view),
     url(r'^check_for_file',views.check_for_file),
     url(r'^download',views.download),
     url(r'^creategh',views.create_github_run),
