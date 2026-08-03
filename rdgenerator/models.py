@@ -5,6 +5,9 @@ class GithubRun(models.Model):
     uuid = models.CharField(verbose_name="uuid", max_length=100)
     status = models.CharField(verbose_name="status", max_length=100)
     github_run_id = models.BigIntegerField(null=True, blank=True)
+    # True when the build runs on this machine (local engine) rather than on
+    # GitHub Actions. Local runs never poll the GitHub API for status.
+    local = models.BooleanField(default=False)
 
 
 class BuildBatch(models.Model):

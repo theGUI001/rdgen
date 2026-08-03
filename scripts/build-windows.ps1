@@ -10,13 +10,36 @@ $Work    = if ($env:RD_WORK) { $env:RD_WORK } else { 'C:\work' }
 $Src     = Join-Path $Work 'rustdesk'
 $Out     = Join-Path $Work 'output'
 $Config  = if ($env:RD_CONFIG) { $env:RD_CONFIG } else { Join-Path $Work 'build.json' }
-$Patches = 'C:\patches'
+$Patches = if ($env:RD_PATCHES) { $env:RD_PATCHES } else { 'C:\patches' }
 
 function Log($m)  { Write-Host "[rdgen] $m" -ForegroundColor Cyan }
 function Warn($m) { Write-Host "[rdgen] $m" -ForegroundColor Yellow }
 function Try-Step([scriptblock]$b) {
     try { & $b } catch { Warn "step failed (ignored): $($_.Exception.Message)" }
 }
+
+# Tool discovery: prefer whatever is on PATH / discoverable (native host, e.g. a
+# Hyper-V VM) and fall back to the fixed paths baked into the container image.
+function Find-Tool($name, [string[]]$fallbacks) {
+    $c = Get-Command $name -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    foreach ($f in $fallbacks) { if (Test-Path $f) { return $f } }
+    return $null
+}
+
+function Find-MSBuild {
+    $vswhere = Find-Tool 'vswhere.exe' @("${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe")
+    if ($vswhere) {
+        $p = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild `
+            -find 'MSBuild\**\Bin\MSBuild.exe' 2>$null | Select-Object -First 1
+        if ($p) { return $p }
+    }
+    return (Find-Tool 'MSBuild.exe' @('C:\BuildTools\MSBuild\Current\Bin\MSBuild.exe'))
+}
+
+$BashExe   = Find-Tool 'bash.exe'   @('C:\mingit\usr\bin\bash.exe', "$env:ProgramFiles\Git\bin\bash.exe")
+$NugetExe  = Find-Tool 'nuget.exe'  @('C:\tools\nuget.exe')
+$MSBuildExe = Find-MSBuild
 
 if (-not (Test-Path $Config)) { throw "config not found: $Config" }
 $cfg = Get-Content $Config -Raw | ConvertFrom-Json
@@ -93,11 +116,14 @@ $env:xOffline=(Cfg 'xOffline' 'false'); $env:hidecm=(Cfg 'hidecm' 'false')
 $env:iconlink_url='false'; $env:logolink_url='false'; $env:privacylink_url='false'
 $env:RD_PATCHES=$Patches; $env:uuid=$uuid; $env:version=$version
 
-$bash = 'C:\mingit\usr\bin\bash.exe'
-if (Test-Path $bash) {
-    Try-Step { & $bash -lc "cd '$($Src -replace '\\','/')' && . C:/rdgen/scripts/customize.sh && customize_common" }
+# customize.sh lives next to this script (works in-container and natively).
+$customizeSh = Join-Path $PSScriptRoot 'customize.sh'
+if (-not (Test-Path $customizeSh)) { $customizeSh = 'C:/rdgen/scripts/customize.sh' }
+if ($BashExe) {
+    $shPath = ($customizeSh -replace '\\','/')
+    Try-Step { & $BashExe -lc "cd '$($Src -replace '\\','/')' && . '$shPath' && customize_common" }
 } else {
-    Warn 'bash not found in image; applying minimal PowerShell fallbacks'
+    Warn 'bash (Git for Windows) not found; applying minimal PowerShell fallbacks only'
     Try-Step { (Get-Content ./libs/hbb_common/src/config.rs) -replace 'rs-ny.rustdesk.com', $server | Set-Content ./libs/hbb_common/src/config.rs }
     Try-Step { (Get-Content ./libs/hbb_common/src/config.rs) -replace 'OeVuKk5nlHiXp\+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=', $key | Set-Content ./libs/hbb_common/src/config.rs }
 }
@@ -114,8 +140,9 @@ Try-Step {
 
 # --- vcpkg ------------------------------------------------------------------
 Report 'Installing vcpkg dependencies'
-$env:VCPKG_ROOT = 'C:\vcpkg'
-Try-Step { & C:\vcpkg\vcpkg.exe install --triplet x64-windows-static --x-install-root C:\vcpkg\installed }
+if (-not $env:VCPKG_ROOT) { $env:VCPKG_ROOT = 'C:\vcpkg' }
+$vcpkgExe = Join-Path $env:VCPKG_ROOT 'vcpkg.exe'
+Try-Step { & $vcpkgExe install --triplet x64-windows-static --x-install-root (Join-Path $env:VCPKG_ROOT 'installed') }
 
 # --- build ------------------------------------------------------------------
 Report 'Compiling RustDesk (this is the long part)'
@@ -141,15 +168,19 @@ Try-Step {
 }
 
 # msi
-Try-Step {
-    $myapp = $appname -replace '\s', '_'
-    Copy-Item "rustdesk/$exeName" "rustdesk/$myapp.exe" -ErrorAction SilentlyContinue
-    Push-Location ./res/msi
-    python preprocess.py --app-name "$myapp" --arp -d ../../rustdesk
-    & C:\tools\nuget.exe restore msi.sln
-    $msbuild = & "C:\BuildTools\MSBuild\Current\Bin\MSBuild.exe" msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
-    Copy-Item ./Package/bin/x64/Release/en-us/Package.msi "../../SignOutput/$filename.msi"
-    Pop-Location
+if (-not $NugetExe)  { Warn 'nuget.exe not found; skipping .msi' }
+elseif (-not $MSBuildExe) { Warn 'MSBuild not found; skipping .msi' }
+else {
+    Try-Step {
+        $myapp = $appname -replace '\s', '_'
+        Copy-Item "rustdesk/$exeName" "rustdesk/$myapp.exe" -ErrorAction SilentlyContinue
+        Push-Location ./res/msi
+        python preprocess.py --app-name "$myapp" --arp -d ../../rustdesk
+        & $NugetExe restore msi.sln
+        & $MSBuildExe msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+        Copy-Item ./Package/bin/x64/Release/en-us/Package.msi "../../SignOutput/$filename.msi"
+        Pop-Location
+    }
 }
 
 Report 'Uploading artifacts'

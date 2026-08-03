@@ -22,6 +22,11 @@ once**:
   Android, configure once, and get a live dashboard for all of them.
 - **Local builds:** `scripts/rdbuild.sh --config build.json --platforms linux,android`
   builds with plain `docker run`, no GitHub needed.
+- **Local web app:** set `BUILD_ENGINE=local` and the site runs builds on its own
+  machine instead of dispatching GitHub Actions (great for a public fork with
+  Actions disabled).
+- **Native Windows (no Docker):** `scripts/windows/` builds `.exe`/`.msi` directly
+  in a Windows/Hyper-V VM.
 - **CI:** `docker-generator.yml` runs the containerised build on GitHub Actions;
   `builder-images.yml` publishes the toolchain images to GHCR.
 

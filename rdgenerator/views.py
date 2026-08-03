@@ -221,6 +221,44 @@ def generate_custom_client(params, full_url, engine='native'):
     base64_bytes = base64.b64encode(string_bytes)
     encodedCustom = base64_bytes.decode("ascii")
 
+    # ---- Local engine: run the build on this machine, no GitHub -------------
+    if engine == 'local' or getattr(_settings, 'BUILD_ENGINE', 'github') == 'local':
+        local_config = {
+            "platform": platform,
+            "version": version,
+            "server": server,
+            "key": key,
+            "apiServer": apiServer,
+            "custom": encodedCustom,
+            "appname": appname,
+            "filename": filename,
+            "compname": compname,
+            "androidappid": androidappid,
+            "urlLink": urlLink,
+            "downloadLink": downloadLink,
+            "delayFix": 'true' if delayFix else 'false',
+            "xOffline": 'true' if xOffline else 'false',
+            "hidecm": 'true' if hidecm else 'false',
+            "removeNewVersionNotif": 'true' if removeNewVersionNotif else 'false',
+            # Custom PNGs are served by this same app; the build fetches them if
+            # it can reach us, and silently skips them otherwise.
+            "iconlink_url": f"{full_url}" if iconlink_url != 'false' else 'false',
+            "iconlink_uuid": iconlink_uuid,
+            "iconlink_file": iconlink_file,
+            "logolink_url": f"{full_url}" if logolink_url != 'false' else 'false',
+            "logolink_uuid": logolink_uuid,
+            "logolink_file": logolink_file,
+            "privacylink_url": f"{full_url}" if privacylink_url != 'false' else 'false',
+            "privacylink_uuid": privacylink_uuid,
+            "privacylink_file": privacylink_file,
+        }
+        GithubRun.objects.update_or_create(
+            uuid=myuuid,
+            defaults={"status": "queued (local)", "local": True},
+        )
+        from .local_runner import start_local_build
+        return start_local_build(myuuid, platform, local_config)
+
     ####from here run the github action, we need user, repo, access token.
     workflow_base = 'https://api.github.com/repos/'+_settings.GHUSER+'/'+_settings.REPONAME+'/actions/workflows/'
     if engine == 'docker':
@@ -359,6 +397,16 @@ def _get_run_status(uuid_val):
         gh_run = GithubRun.objects.get(uuid=uuid_val)
     except GithubRun.DoesNotExist:
         return {"found": False}
+
+    # Local builds are tracked entirely in the DB (updated by local_runner);
+    # there is no GitHub run to poll or link to.
+    if getattr(gh_run, 'local', False):
+        return {
+            "found": True,
+            "status": gh_run.status,
+            "github_log_url": f"/local_log?uuid={uuid_val}",
+            "gh_run": gh_run,
+        }
 
     github_log_url = f"https://github.com/{_settings.GHUSER}/{_settings.REPONAME}/actions/runs/{gh_run.github_run_id}"
 
@@ -583,14 +631,35 @@ def check_for_file(request):
 def download(request):
     filename = request.GET['filename']
     uuid = request.GET['uuid']
-    file_path = os.path.join('exe', uuid, filename)
+    # Guard against path traversal and only serve from exe/<uuid>/.
+    base_dir = os.path.abspath(os.path.join('exe', uuid))
+    file_path = os.path.abspath(os.path.join(base_dir, filename))
+    if not file_path.startswith(base_dir + os.sep):
+        return HttpResponseForbidden("Invalid filename")
+    if not os.path.isfile(file_path):
+        from django.http import Http404
+        raise Http404("This artifact was not produced by the build")
     with open(file_path, 'rb') as file:
         content = file.read()
     response = HttpResponse(content, headers={
-        'Content-Type': 'application/vnd.microsoft.portable-executable',
+        'Content-Type': 'application/octet-stream',
         'Content-Disposition': f'attachment; filename="{filename}"'
     })
     return response
+
+
+def local_log(request):
+    """Plain-text build log for a local build (build engine == 'local')."""
+    uuid_val = request.GET.get('uuid', '')
+    repo_root = getattr(_settings, 'RDGEN_REPO_ROOT', _settings.BASE_DIR)
+    base_dir = os.path.abspath(os.path.join(str(repo_root), 'local_builds'))
+    log_path = os.path.abspath(os.path.join(base_dir, uuid_val, 'build.log'))
+    if not log_path.startswith(base_dir + os.sep) or not os.path.isfile(log_path):
+        return HttpResponse("No local build log found for this run.",
+                            content_type='text/plain', status=404)
+    with open(log_path, 'r', errors='replace') as fh:
+        content = fh.read()
+    return HttpResponse(content, content_type='text/plain; charset=utf-8')
 
 def get_png(request):
     filename = request.GET['filename']

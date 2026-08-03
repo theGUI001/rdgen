@@ -32,6 +32,7 @@ urlpatterns = [
     url(r'^batch',views.batch_view),
     url(r'^check_for_file',views.check_for_file),
     url(r'^download',views.download),
+    url(r'^local_log',views.local_log),
     url(r'^creategh',views.create_github_run),
     url(r'^updategh',views.update_github_run),
     url(r'^startgh',views.startgh),

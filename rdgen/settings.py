@@ -32,6 +32,16 @@ SH_SECRET = os.environ.get('SH_SECRET', 'secret')
 # Docker builder image tag used by the container-based (docker-generator) engine.
 BUILDER_IMAGE_TAG = os.environ.get('BUILDER_IMAGE_TAG', 'latest')
 
+# How builds are executed:
+#   'github' — dispatch GitHub Actions workflows (the original behaviour).
+#   'local'  — run the build on this machine via scripts/rdbuild.sh (Docker),
+#              no GitHub involved. Ideal when Actions is disabled on a fork.
+BUILD_ENGINE = os.environ.get('BUILD_ENGINE', 'github')
+# Repo root that holds scripts/ and where local build artifacts are written.
+RDGEN_REPO_ROOT = os.environ.get('RDGEN_REPO_ROOT', str(BASE_DIR))
+# Comma list of platforms the local engine is allowed to build here.
+LOCAL_BUILD_PLATFORMS = os.environ.get('LOCAL_BUILD_PLATFORMS', 'linux,android,windows').split(',')
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 

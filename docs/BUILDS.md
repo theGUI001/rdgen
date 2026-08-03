@@ -156,6 +156,74 @@ takes a while (it compiles the toolchain once); subsequent runs are fast.
 
 ---
 
+## Running the web app in local mode (no GitHub)
+
+The Django app can execute builds on the machine it runs on instead of
+dispatching GitHub Actions. Set one environment variable:
+
+```bash
+export BUILD_ENGINE=local        # 'github' (default) or 'local'
+```
+
+With `BUILD_ENGINE=local`, the **single builder** and the **batch scheduler**
+both run `scripts/rdbuild.sh` locally. The existing waiting page and batch
+dashboard work unchanged — status is tracked in the database and updated as the
+build progresses (`queued → building → success/failure`), and finished
+artifacts are served from the same `/download` links as before. A plain-text
+build log is available at `/local_log?uuid=<uuid>`.
+
+Relevant settings (all env vars):
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `BUILD_ENGINE` | `github` | `local` runs builds on this machine |
+| `RDGEN_REPO_ROOT` | project dir | where `scripts/` lives and artifacts are written |
+| `LOCAL_BUILD_PLATFORMS` | `linux,android,windows` | platforms the local engine may build |
+
+Notes and limits of local mode:
+- The machine running the app needs **Docker** (for Linux/Android). On Windows,
+  if the app runs on the same host, it uses the **native** Windows build
+  (below) instead of Docker.
+- Custom **icon/logo PNGs** are fetched by the build over HTTP from the app.
+  That works when the build can reach the app's URL; a Docker container on the
+  same host usually can't reach `localhost`, so custom PNGs may be skipped in
+  local Docker builds (the client still builds fine, just with default icons).
+- Builds run in a background thread. Use one worker per build-in-flight if you
+  run under gunicorn and expect concurrency.
+
+---
+
+## Native Windows builds (no Docker) — for a Hyper-V VM
+
+Windows containers are heavy and can't run under WSL2, so for Windows the
+simplest local path is a **native build inside a Windows VM** (e.g. Hyper-V).
+Two scripts under `scripts/windows/`:
+
+```powershell
+# 1) One-time: install the toolchain (MSVC, Rust, Flutter, LLVM, vcpkg, ...).
+#    Run elevated. -Persist writes the env vars machine-wide.
+powershell -ExecutionPolicy Bypass -File scripts\windows\setup-toolchain.ps1 -Persist
+
+# 2) Build from a config (open a fresh shell after step 1):
+powershell -ExecutionPolicy Bypass -File scripts\windows\build-windows-native.ps1 `
+    -Config .\build.json -Output .\output
+
+#    Or do both at once the first time:
+powershell -ExecutionPolicy Bypass -File scripts\windows\build-windows-native.ps1 `
+    -Config .\build.json -Setup
+```
+
+`build-windows-native.ps1` reuses the same `scripts/build-windows.ps1` logic as
+the container, but that script now **discovers the toolchain on PATH** (MSBuild
+via vswhere, nuget, git-bash, vcpkg), so it runs identically in a container or
+on a bare VM. Artifacts (`<filename>.exe`, `<filename>.msi`) land in `-Output`.
+
+If the Django app runs **inside** that same Windows VM with
+`BUILD_ENGINE=local`, it will call the native Windows build automatically for
+`windows` targets (no Docker needed).
+
+---
+
 ## Turning GitHub Actions OFF completely (public fork)
 
 If you only ever build locally, you can guarantee that **no CI ever runs** on
