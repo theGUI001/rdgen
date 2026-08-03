@@ -31,8 +31,12 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # Decide which images to (re)build from the trigger.
+  # CI kill-switch: the image jobs all depend on this one, which refuses to run
+  # unless the repository variable RDGEN_ENABLE_CI is set to 'true'. Unset by
+  # default (e.g. on a public fork), so this workflow builds nothing even if
+  # dispatched or triggered by a push. See docs/BUILDS.md.
   plan:
+    if: ${{ vars.RDGEN_ENABLE_CI == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       linux: ${{ steps.pick.outputs.linux }}

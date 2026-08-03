@@ -36,8 +36,17 @@ env:
   IMAGE_TAG: ${{ inputs.image_tag }}
 
 jobs:
+  # CI kill-switch. Every build job depends (directly or transitively) on these
+  # two root jobs, and both refuse to run unless the repository variable
+  # RDGEN_ENABLE_CI is explicitly set to 'true'. With it unset (the default,
+  # e.g. on a public fork) this workflow does nothing even if dispatched, so no
+  # one can burn your Actions minutes. To go fully local, also disable Actions
+  # in the repo settings — see docs/BUILDS.md. To re-enable CI builds, set the
+  # variable: Settings -> Secrets and variables -> Actions -> Variables.
+
   # Fetch the encrypted secrets zip once and share it with the build jobs.
   setup:
+    if: ${{ vars.RDGEN_ENABLE_CI == 'true' }}
     uses: ./.github/workflows/fetch-encrypted-secrets.yml
     with:
       zip_url_json: ${{ inputs.zip_url }}
@@ -45,6 +54,7 @@ jobs:
   # Expand the comma list into a JSON matrix, dropping platforms that cannot be
   # built in Docker so the caller gets a clear per-platform result.
   plan:
+    if: ${{ vars.RDGEN_ENABLE_CI == 'true' }}
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}

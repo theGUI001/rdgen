@@ -115,10 +115,15 @@ The web app also needs the variables it already used (`GHUSER`, `GHBEARER`,
 
 ---
 
-## Building locally with `rdbuild.sh`
+## Building locally with `rdbuild.sh` (recommended for a public fork)
 
-No GitHub, just Docker. Linux and Android build on any Docker host; Windows
-needs a Windows host with Windows containers.
+No GitHub, no GHCR, no Actions — just Docker on your own machine. This is the
+right approach when the repo is a **public fork you can't make private**: you
+turn CI off entirely (see below) and build everything locally instead.
+
+`rdbuild.sh` is **local-first**: it builds the builder image on your machine the
+first time and reuses it afterwards. Nothing is pulled from a registry unless
+you explicitly ask for one.
 
 ```bash
 # From a config file, two platforms in one go:
@@ -129,12 +134,58 @@ scripts/rdbuild.sh --platforms linux \
     --appname "Acme Remote" --filename acme-remote \
     --server rs.acme.com --apiServer https://api.acme.com
 
-# Force a local image build instead of pulling from GHCR:
-scripts/rdbuild.sh --config my-build.json --platforms linux --build-image
+# Rebuild the builder image (e.g. after changing a Dockerfile):
+scripts/rdbuild.sh --config my-build.json --platforms linux --rebuild-image
+
+# Advanced: opt in to a prebuilt image from a registry instead of local build:
+scripts/rdbuild.sh --registry ghcr.io/yourname --platforms linux
 ```
 
-Artifacts land in `./output/<platform>/`. Point at your own registry with
-`--registry ghcr.io/yourname` or `RDGEN_OWNER=yourname`.
+Artifacts land in `./output/<platform>/`. The first Linux/Android image build
+takes a while (it compiles the toolchain once); subsequent runs are fast.
+
+### On Windows with Docker Desktop / WSL2
+
+- **Linux and Android** build fine under Docker Desktop's WSL2 backend — they are
+  Linux containers. Run the commands above from a WSL/PowerShell shell.
+- **Windows** (`.exe`/`.msi`) is a *Windows container* and **cannot** run under
+  WSL2 (that's a Linux VM). To build it locally you must switch Docker Desktop to
+  "Windows containers" mode on a Windows host; the image is large (~25 GB). For
+  most people it's easier to build Linux/Android locally and skip the Windows
+  target, or run just that one on a Windows machine.
+
+---
+
+## Turning GitHub Actions OFF completely (public fork)
+
+If you only ever build locally, you can guarantee that **no CI ever runs** on
+your fork — nobody can trigger a build, burn your Actions minutes, or produce
+downloadable artifacts through a workflow run. Two layers:
+
+### 1. Disable Actions in the repository settings (the real guarantee)
+
+This is a one-click, owner-only switch that no other user can bypass:
+
+> **Settings → Actions → General → Actions permissions → "Disable actions" → Save**
+
+With Actions disabled, *every* workflow in the repo (including the legacy
+`generator-*.yml` and `docker-build.yml`) is inert. This is the definitive way
+to lock CI on a public fork.
+
+### 2. The built-in kill-switch (defense in depth)
+
+Even if Actions is left enabled, the container build workflows
+(`docker-generator.yml`, `builder-images.yml`) refuse to do anything unless the
+repository variable **`RDGEN_ENABLE_CI`** is set to `true`. It is **unset by
+default**, so these workflows are no-ops out of the box.
+
+To *use* CI builds later, set the variable
+(Settings → Secrets and variables → Actions → Variables → New variable:
+`RDGEN_ENABLE_CI = true`). To keep CI off, just never set it.
+
+> Note: with Actions disabled, the Django web app's "Generate" / batch buttons
+> stop working, because they dispatch GitHub workflows. Local `rdbuild.sh` is
+> the intended path in that setup.
 
 ### `build.json`
 
