@@ -184,12 +184,32 @@ customize_android() {
     tsed -e 's/bind.mainGetLocalOption(key:\s*"show-scam-warning")/"N"/g' ./flutter/lib/mobile/pages/server_page.dart
 }
 
-# Replace the app icon from a downloaded PNG. base_url/file/uuid come from config.
+ensure_icon() {
+    mkdir -p ./res
+    if [ ! -f ./res/icon.png ]; then
+        local raw_icon="${iconfile:-${iconbase64:-}}"
+        if [ -n "$raw_icon" ] && [ "$raw_icon" != "false" ]; then
+            log "extracting custom icon from base64"
+            python3 -c "
+import base64
+s = '''$raw_icon'''
+if ',' in s:
+    s = s.split(',', 1)[1]
+with open('./res/icon.png', 'wb') as f:
+    f.write(base64.b64decode(s.strip()))
+" 2>/dev/null || true
+        elif [ "${iconlink_url:-false}" != "false" ] && [ -n "${iconlink_url:-}" ]; then
+            fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 1
+        fi
+    fi
+    [ -f ./res/icon.png ]
+}
+
+# Replace the app icon from a downloaded PNG or base64.
 apply_icon() {
-    [ "${iconlink_url}" != "false" ] && [ -n "${iconlink_url}" ] || return 0
+    ensure_icon || return 0
     local im
     im="$(magick_bin)" || { warn "imagemagick missing, skipping icon"; return 0; }
-    fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 0
     log "regenerating icon assets"
     try "$im" ./res/icon.png -define icon:auto-resize=256,64,48,32,16 ./res/icon.ico
     try cp ./res/icon.ico ./res/tray-icon.ico
@@ -198,6 +218,7 @@ apply_icon() {
     try "$im" ./res/icon.png -resize 128x128 ./res/128x128.png
     try "$im" ./res/128x128.png -resize 200% ./res/128x128@2x.png
 }
+
 
 # macOS-specific whitelabelling: bundle metadata (Info.plist, xcconfig, Xcode
 # project), the Flutter binary name and the About/slogan strings. Mirrors the
@@ -288,15 +309,13 @@ PY
 # macOS icon pipeline: app icon set, AppIcon.icns, menu-bar tray icons and the
 # SVG the Flutter assets expect. Requires imagemagick + potrace.
 apply_icon_macos() {
-    [ "${iconlink_url}" != "false" ] && [ -n "${iconlink_url}" ] || return 0
+    ensure_icon || return 0
     local im
     im="$(magick_bin)" || { warn "imagemagick missing, skipping macOS icons"; return 0; }
 
     local iconset_dir="./flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset"
     mkdir -p "$iconset_dir" ./res ./flutter/assets
 
-    [ -f ./res/icon.png ] || \
-        fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 0
 
     log "generating macOS icon assets"
     local size
