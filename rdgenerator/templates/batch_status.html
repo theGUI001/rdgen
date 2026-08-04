@@ -76,7 +76,9 @@
         const exts = {
             linux:   [base + "-x86_64.deb", base + "-x86_64.rpm"],
             windows: [base + ".exe", base + ".msi"],
-            android: [base + "-aarch64.apk", base + "-armv7.apk", base + "-x86_64.apk"]
+            android: [base + "-aarch64.apk", base + "-armv7.apk", base + "-x86_64.apk"],
+            // macOS builds natively, so only this machine's architecture exists.
+            macos:   [base + "-aarch64.dmg", base + "-x86_64.dmg"]
         }[job.platform] || [base];
         let html = '<div class="dl">';
         exts.forEach(function(f){
