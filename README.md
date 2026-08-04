@@ -20,9 +20,10 @@ build** for a Hyper-V VM. Everything below is documented in depth in
 [`docs/BUILDS.md`](docs/BUILDS.md); this section is the quick reference.
 
 > **Platform support:** Linux, Windows and Android can be built with Docker
-> and/or locally. **macOS and iOS cannot** — Apple's toolchain only runs on
-> macOS, so those still need the `generator-macos.yml` workflow on a macOS
-> runner. The batch UI and local tools skip Apple targets with a clear message.
+> and/or locally. **macOS cannot be built in Docker** — Apple's toolchain only
+> runs on macOS — but it *can* be built natively on a Mac or macOS VM with
+> `scripts/macos/` (see #5), or on a macOS runner via `generator-macos.yml`.
+> iOS is not supported by this build system.
 
 ### At a glance
 
@@ -32,6 +33,7 @@ build** for a Hyper-V VM. Everything below is documented in depth in
 | Build on my own machine, no GitHub at all | **`scripts/rdbuild.sh`** (Docker) |
 | Run the web app so it builds locally | **`BUILD_ENGINE=local`** |
 | Build Windows `.exe`/`.msi` without Docker | **`scripts/windows/`** (native, e.g. Hyper-V) |
+| Build a macOS `.dmg` on a Mac / macOS VM | **`scripts/macos/`** (native, no Docker) |
 | Guarantee nobody runs CI on my public fork | **Disable Actions** in repo settings |
 | Still use GitHub Actions, but containerised | **`docker-generator.yml`** + **`builder-images.yml`** |
 
@@ -83,7 +85,7 @@ locally in a background thread. The waiting page, batch dashboard and
 |---------|---------|---------|
 | `BUILD_ENGINE` | `github` | `local` runs builds on this machine |
 | `RDGEN_REPO_ROOT` | project dir | where `scripts/` lives and artifacts are written |
-| `LOCAL_BUILD_PLATFORMS` | `linux,android,windows` | platforms the local engine may build |
+| `LOCAL_BUILD_PLATFORMS` | `linux,android,windows` (+`macos` on a Mac) | platforms the local engine may build |
 
 ### 4. Native Windows build (no Docker) — for a Hyper-V VM
 
@@ -102,7 +104,59 @@ powershell -ExecutionPolicy Bypass -File scripts\windows\build-windows-native.ps
 If the web app runs inside that same VM with `BUILD_ENGINE=local`, it calls the
 native Windows build automatically for `windows` targets.
 
-### 5. Containerised GitHub Actions (optional)
+### 5. Native macOS build (no Docker) — for a Mac or macOS VM
+
+Apple's toolchain (Xcode, `codesign`, `iconutil`, `hdiutil`) cannot run in a
+container, so macOS follows the same native pattern as Windows. Scripts live in
+`scripts/macos/` and produce a signed `.dmg` for the machine's architecture
+(`aarch64` on Apple silicon, `x86_64` on Intel):
+
+```bash
+# 1) One-time: install/verify the toolchain. An existing Flutter or Rust on
+#    PATH is reused as-is — nothing is overwritten.
+scripts/macos/setup-toolchain.sh
+
+# 2) Build from a config:
+scripts/macos/build-macos-native.sh --config ./build.json --output ./output
+```
+
+`scripts/rdbuild.sh --platforms macos` also works **when run on a Mac**: it
+detects Darwin and delegates to the native script instead of Docker, so a mixed
+batch like `--platforms linux,macos` builds Linux in a container and macOS
+natively in one command.
+
+The toolchain setup installs (skipping anything already present): Xcode command
+line tools, imagemagick, potrace, cmake, ninja, pkg-config, llvm, create-dmg,
+NASM 2.16 (not 3.x — it breaks ffmpeg's assembly), Rust + the host target,
+Flutter 3.24.5 with the RustDesk patches, CocoaPods, vcpkg and
+`flutter_rust_bridge_codegen`.
+
+**Signing.** Builds are **ad-hoc signed** by default, which is enough to run
+locally but still shows Gatekeeper's "unidentified developer" prompt on other
+machines. For a real Developer ID, install `rcodesign` (`brew install
+rcodesign`) and export your certificate before building:
+
+```bash
+export MACOS_P12_FILE=/path/to/certificate.p12
+export MACOS_P12_PASSWORD='…'
+```
+
+If the web app runs on that Mac with `BUILD_ENGINE=local`, `macos` is offered in
+the builder and batch UIs and dispatched to the native script automatically.
+
+| Env var | Meaning |
+|---------|---------|
+| `MACOS_P12_FILE` / `MACOS_P12_PASSWORD` | Developer ID certificate; ad-hoc signing when unset |
+| `MIN_MACOS_VERSION` | deployment target on Apple silicon (default `12.3`) |
+| `RDGEN_INSTALL_ROOT` | where vcpkg/managed Flutter go (default `~/rdgen-tools`) |
+
+**Running the Mac in a VM.** macOS may only be virtualised on Apple hardware, so
+this means a VM on a Mac host (UTM, Parallels, VMware Fusion, or `tart` for a
+headless CI-style setup). Give it ≥8 GB RAM and ≥80 GB disk — Xcode CLT, Flutter
+and the vcpkg build tree are large — and the scripts above work unchanged inside
+it.
+
+### 6. Containerised GitHub Actions (optional)
 
 If you *do* want CI: run **Build Docker Builder Images** (`builder-images.yml`)
 once to publish the toolchain images to GHCR, then the web app dispatches
@@ -129,9 +183,10 @@ the default `github` engine has nothing to dispatch to.
 |------|---------|
 | `docker/*.Dockerfile` | Linux / Android / Windows builder toolchain images |
 | `scripts/customize.sh` | all source-level whitelabelling, shared by every platform |
-| `scripts/build-{linux,android}.sh`, `build-windows.ps1` | per-platform build + package |
+| `scripts/build-{linux,android,macos}.sh`, `build-windows.ps1` | per-platform build + package |
 | `scripts/rdbuild.sh` | local orchestrator (multi-platform `docker run`) |
 | `scripts/windows/*.ps1` | native Windows toolchain setup + build (no Docker) |
+| `scripts/macos/*.sh` | native macOS toolchain setup + build (no Docker) |
 | `scripts/config.example.json` | annotated example `build.json` |
 | `rdgenerator/local_runner.py` | runs builds locally for `BUILD_ENGINE=local` |
 | `.github/workflows/builder-images.yml` | build & push images to GHCR |

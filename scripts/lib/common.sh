@@ -25,8 +25,30 @@ try() {
     fi
 }
 
+# In-place sed that works with both GNU sed (Linux containers) and BSD sed
+# (macOS hosts), where -i takes a mandatory backup suffix.
+sed_i() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        sed -i '' "$@"
+    else
+        sed -i "$@"
+    fi
+}
+
 # sed -i that never fails the build.
-tsed() { try sed -i "$@"; }
+tsed() { try sed_i "$@"; }
+
+# ImageMagick 7 dropped the `convert` alias in favour of `magick`; Homebrew
+# ships 7 while the Linux images still have 6.
+magick_bin() {
+    if command -v magick >/dev/null 2>&1; then
+        printf 'magick\n'
+    elif command -v convert >/dev/null 2>&1; then
+        printf 'convert\n'
+    else
+        return 1
+    fi
+}
 
 # Reads build.json and exports every key as an environment variable.
 load_config() {
@@ -161,7 +183,7 @@ generate_bridge() {
     log "generating flutter_rust_bridge files"
     (
         cd "$RD_SRC/flutter" || die "flutter dir missing"
-        try sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml
+        tsed -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml
         flutter pub get
     )
     (

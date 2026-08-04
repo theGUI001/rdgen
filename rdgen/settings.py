@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 import os
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -39,8 +40,16 @@ BUILDER_IMAGE_TAG = os.environ.get('BUILDER_IMAGE_TAG', 'latest')
 BUILD_ENGINE = os.environ.get('BUILD_ENGINE', 'github')
 # Repo root that holds scripts/ and where local build artifacts are written.
 RDGEN_REPO_ROOT = os.environ.get('RDGEN_REPO_ROOT', str(BASE_DIR))
-# Comma list of platforms the local engine is allowed to build here.
-LOCAL_BUILD_PLATFORMS = os.environ.get('LOCAL_BUILD_PLATFORMS', 'linux,android,windows').split(',')
+# Comma list of platforms the local engine is allowed to build here. macOS is
+# only offered on an Apple host, where it builds natively (no Docker).
+_DEFAULT_LOCAL_PLATFORMS = 'linux,android,windows'
+if sys.platform == 'darwin':
+    _DEFAULT_LOCAL_PLATFORMS += ',macos'
+LOCAL_BUILD_PLATFORMS = [
+    p.strip() for p in
+    os.environ.get('LOCAL_BUILD_PLATFORMS', _DEFAULT_LOCAL_PLATFORMS).split(',')
+    if p.strip()
+]
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

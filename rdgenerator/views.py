@@ -5,6 +5,7 @@ from django.shortcuts import render, get_object_or_404
 from django.core.files.base import ContentFile
 import os
 import secrets
+import sys
 import re
 import requests
 import base64
@@ -468,13 +469,35 @@ def generator_view(request):
 DOCKER_PLATFORMS = ['linux', 'windows', 'android']
 
 
+def _macos_available():
+    """True when this host can build macOS itself (local engine on a Mac).
+
+    Apple's toolchain never runs in a container, so macOS is only offered when
+    the app runs in local mode on macOS, where scripts/macos/ builds natively.
+    """
+    return (
+        sys.platform == 'darwin'
+        and getattr(_settings, 'BUILD_ENGINE', 'github') == 'local'
+        and 'macos' in getattr(_settings, 'LOCAL_BUILD_PLATFORMS', [])
+    )
+
+
+def _batch_platforms():
+    """Platforms the batch scheduler may offer on this host."""
+    platforms = list(DOCKER_PLATFORMS)
+    if _macos_available():
+        platforms.append('macos')
+    return platforms
+
+
 def batch_view(request):
     """Multi-platform scheduler UI. GET renders the form; POST fans out."""
     if request.method != 'POST':
         form = GenerateForm()
         return render(request, 'batch.html', {
             'form': form,
-            'docker_platforms': DOCKER_PLATFORMS,
+            'docker_platforms': _batch_platforms(),
+            'macos_available': _macos_available(),
         })
 
     # A batch reuses GenerateForm for validation but ignores its single
@@ -483,16 +506,18 @@ def batch_view(request):
     if not form.is_valid():
         return render(request, 'batch.html', {
             'form': form,
-            'docker_platforms': DOCKER_PLATFORMS,
+            'docker_platforms': _batch_platforms(),
+            'macos_available': _macos_available(),
             'errors': form.errors,
         })
 
     selected = request.POST.getlist('platforms')
-    selected = [p for p in selected if p in DOCKER_PLATFORMS]
+    selected = [p for p in selected if p in _batch_platforms()]
     if not selected:
         return render(request, 'batch.html', {
             'form': form,
-            'docker_platforms': DOCKER_PLATFORMS,
+            'docker_platforms': _batch_platforms(),
+            'macos_available': _macos_available(),
             'errors': {'platforms': ['Select at least one platform.']},
         })
 

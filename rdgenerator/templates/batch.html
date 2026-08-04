@@ -94,12 +94,29 @@
                     <span class="psub">.apk (per ABI)</span>
                     <i class="fas fa-check-circle check"></i>
                 </label>
+                {% if macos_available %}
+                <label class="platform-card" data-platform="macos">
+                    <input type="checkbox" name="platforms" value="macos">
+                    <i class="fab fa-apple"></i>
+                    <span class="pname">macOS</span>
+                    <span class="psub">.dmg (this Mac's arch)</span>
+                    <i class="fas fa-check-circle check"></i>
+                </label>
+                {% endif %}
             </div>
+            {% if macos_available %}
+            <div class="note">
+                <i class="fab fa-apple"></i> macOS builds run natively on this Mac (no Docker)
+                and produce a .dmg for this machine's architecture. iOS is not supported.
+            </div>
+            {% else %}
             <div class="note">
                 <i class="fab fa-apple"></i> macOS and iOS are not shown: Apple's toolchain
-                cannot run in Docker, so they need a macOS host. Use the single-build page
-                with the macOS workflow for those targets.
+                cannot run in Docker, so they need a macOS host. Run this app on a Mac (or a
+                macOS VM) with <code>BUILD_ENGINE=local</code> to build macOS natively, or use
+                the single-build page with the macOS workflow.
             </div>
+            {% endif %}
         </div>
 
         <div class="section">

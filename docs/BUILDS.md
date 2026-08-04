@@ -13,10 +13,12 @@ laptop) every time. The same containers power three things:
    involved.
 
 > **Platform reality check.** Linux, Windows and Android can be built in Docker.
-> **macOS and iOS cannot** — Apple's toolchain only runs on macOS, so those
-> targets still need the `generator-macos.yml` workflow on a macOS runner. The
-> batch UI and `rdbuild.sh` both refuse Apple targets with a clear message
-> rather than failing halfway through.
+> **macOS cannot** — Apple's toolchain only runs on macOS. It is instead built
+> *natively* by `scripts/macos/` on a Mac or a macOS VM (see
+> [Native macOS builds](#native-macos-builds)), or by the `generator-macos.yml`
+> workflow on a macOS runner. `rdbuild.sh` delegates `macos` to the native
+> script when it runs on Darwin, and skips it with a clear message elsewhere.
+> iOS is not supported.
 
 ---
 
@@ -54,7 +56,8 @@ runs it.
 | `docker/windows-builder.Dockerfile` | Windows toolchain (MSVC + Windows SDK + Flutter); Windows container |
 | `scripts/lib/common.sh` | shared helpers: config loading, checkout, bridge codegen, upload |
 | `scripts/customize.sh`  | all source-level whitelabelling (one copy for every platform) |
-| `scripts/build-linux.sh`, `build-android.sh`, `build-windows.ps1` | per-platform build + package |
+| `scripts/build-linux.sh`, `build-android.sh`, `build-windows.ps1`, `build-macos.sh` | per-platform build + package |
+| `scripts/macos/setup-toolchain.sh`, `build-macos-native.sh` | native macOS toolchain + build wrapper (no Docker) |
 | `scripts/rdbuild.sh`    | local orchestrator (`docker run` wrapper, multi-platform) |
 | `scripts/config.example.json` | annotated example `build.json` |
 | `.github/workflows/builder-images.yml` | build & push the images to GHCR |
@@ -224,6 +227,105 @@ If the Django app runs **inside** that same Windows VM with
 
 ---
 
+## Native macOS builds
+
+macOS is the one platform that can **never** be containerised: `xcodebuild`,
+`codesign`, `iconutil` and `hdiutil` are part of Apple's toolchain and only run
+on macOS, and Flutter has no macOS cross-compilation from Linux. So macOS uses
+the same "native build in a VM" pattern as Windows, with the scripts under
+`scripts/macos/`.
+
+Because macOS may only legally be virtualised on Apple hardware, "in a VM" here
+means a guest on a Mac host — UTM, Parallels, VMware Fusion, or `tart` for a
+headless CI-style setup. Give the guest **≥8 GB RAM and ≥80 GB disk**; the
+toolchain and the vcpkg build tree are big. Everything below is identical on
+bare metal and in the VM.
+
+```bash
+# 1) One-time: install/verify the toolchain.
+scripts/macos/setup-toolchain.sh
+
+# 2) Build from a config:
+scripts/macos/build-macos-native.sh --config ./build.json --output ./output
+
+#    Or do both at once the first time:
+scripts/macos/build-macos-native.sh --config ./build.json --setup
+```
+
+### What setup-toolchain.sh does
+
+It mirrors the toolchain the Dockerfiles install for the other platforms, but
+onto the host. Every component is **skipped when already present** — in
+particular an existing Flutter or Rust on PATH is reused untouched, so a Mac
+that is already set up for Flutter work only gains the missing pieces.
+
+| Component | Notes |
+|-----------|-------|
+| Xcode command line tools | via `xcode-select --install`; the script stops and asks you to re-run once it finishes |
+| Homebrew packages | imagemagick, potrace, cmake, ninja, pkg-config, llvm, create-dmg, wget, cocoapods |
+| NASM **2.16.03** | installed into `$RDGEN_INSTALL_ROOT/bin`, *not* `brew install nasm` — Homebrew ships NASM 3.x, whose CLI breaks aom/ffmpeg assembly |
+| Rust | rustup + the host target (`aarch64-` or `x86_64-apple-darwin`) |
+| Flutter 3.24.5 | plus the RustDesk dropdown patch and the `_setFramesEnabledState` workaround |
+| vcpkg | pinned to the same commit as the workflows |
+| `flutter_rust_bridge_codegen` 1.80.1 | compiled from source, slow the first time |
+
+It writes `$RDGEN_INSTALL_ROOT/env.sh` (default `~/rdgen-tools/env.sh`) with
+`VCPKG_ROOT`, `LIBCLANG_PATH` and a `PATH` prefix; `build-macos-native.sh`
+sources it automatically.
+
+### What the build produces
+
+`scripts/build-macos.sh` runs the same shared pipeline as the other platforms —
+`load_config` → `checkout_rustdesk` → `customize_common` → `customize_macos` →
+icons → `generate_bridge` → vcpkg → `build.py --flutter --hwcodec
+--unix-file-copy-paste` — then signs the bundle and wraps it in a DMG:
+
+```
+output/macos/<filename>-<arch>.dmg      # arch = arm64 or x86_64
+```
+
+`customize_macos` handles the Apple-specific whitelabelling the shared code
+can't: `Info.plist` (`CFBundleName`, `CFBundleDisplayName`,
+`CFBundleIdentifier`), `AppInfo.xcconfig`, the Xcode project's `PRODUCT_NAME` /
+bundle id, the CMake `BINARY_NAME`, the `.app` name in `build.py`, the About and
+slogan strings, and the deployment target on Apple silicon. The bundle
+identifier is `com.<appname>.app` with every character that Apple disallows
+stripped out, so app names with spaces or accents still sign cleanly.
+
+`apply_icon_macos` builds the full macOS icon set (16→1024), `AppIcon.icns` via
+`iconutil`, the menu-bar tray icons and the SVG asset via potrace.
+
+### Signing
+
+| Setup | Result |
+|-------|--------|
+| nothing configured (default) | **ad-hoc signature** (`codesign --force --deep --sign -`). Runs on this Mac; other Macs show the "unidentified developer" warning |
+| `MACOS_P12_FILE` + `MACOS_P12_PASSWORD`, with `rcodesign` installed | proper Developer ID signature with the hardened runtime, executable → frameworks → bundle, same order as the workflow |
+
+Notarisation is not automated; run `xcrun notarytool submit` on the DMG if you
+need it.
+
+### Integration with the rest of the system
+
+- **`rdbuild.sh --platforms macos`** — on Darwin it delegates to
+  `build-macos-native.sh`; elsewhere it skips with an explanation. Docker is
+  only required if the platform list contains something other than `macos`, so
+  a Mac without Docker can still build macOS with the usual entry point. Mixed
+  lists work: `--platforms linux,macos` containerises Linux and builds macOS
+  natively.
+- **`BUILD_ENGINE=local` on a Mac** — `macos` is added to
+  `LOCAL_BUILD_PLATFORMS` by default, appears in the batch UI, and
+  `local_runner.py` dispatches it to the native script. Asking for a macOS
+  build from a non-Apple host returns a clear error instead of failing halfway.
+
+| Env var | Meaning |
+|---------|---------|
+| `MACOS_P12_FILE` / `MACOS_P12_PASSWORD` | Developer ID certificate (needs `rcodesign`) |
+| `MIN_MACOS_VERSION` | deployment target on Apple silicon (default `12.3`) |
+| `RDGEN_INSTALL_ROOT` | toolchain root (default `~/rdgen-tools`) |
+
+---
+
 ## Turning GitHub Actions OFF completely (public fork)
 
 If you only ever build locally, you can guarantee that **no CI ever runs** on
@@ -303,4 +405,12 @@ from `.github/patches/`, with a network fallback if a patch is missing.
   and run on a Windows host; it won't run under Linux Docker.
 - **A build fails only for one platform in a batch** — the others still complete;
   the failed job shows its status and a link to the GitHub build log.
-- **macOS/iOS** — not supported in Docker by design; use `generator-macos.yml`.
+- **macOS: “no .app bundle produced”** — almost always a failed `build.py` run
+  further up the log. Check that `VCPKG_ROOT` is exported (the env file from
+  `setup-toolchain.sh` does it) and that `flutter doctor` is happy.
+- **macOS: “app is damaged and can't be opened”** on another Mac — the ad-hoc
+  signature doesn't travel. Sign with a Developer ID (`MACOS_P12_FILE`) or
+  clear the quarantine flag locally: `xattr -cr /Applications/<App>.app`.
+- **macOS: ffmpeg/aom assembly errors** — NASM 3.x is on PATH. The build needs
+  2.16.x; `setup-toolchain.sh` installs it into `$RDGEN_INSTALL_ROOT/bin`.
+- **iOS** — not supported by this build system.
