@@ -347,19 +347,29 @@ apply_icon_macos() {
         mkdir -p "./macos/Runner/Assets.xcassets/AppIcon.appiconset"
     fi
 
-    log "generating macOS icon assets"
+    log "generating macOS squircle icon assets"
+    local macos_canvas="./res/icon_macos_squircle.png"
+    try "$im" ./res/icon.png -resize 824x824 ./res/resized_824.png
+    try "$im" -size 824x824 xc:none -fill white -draw "roundrectangle 0,0 824,824 180,180" ./res/mask_824.png
+    try "$im" ./res/resized_824.png ./res/mask_824.png -compose DstIn -composite ./res/rounded_824.png
+    try "$im" -size 1024x1024 xc:none ./res/rounded_824.png -gravity center -composite "$macos_canvas"
+    rm -f ./res/resized_824.png ./res/mask_824.png ./res/rounded_824.png
+
+    local icon_src="$macos_canvas"
+    [ -f "$icon_src" ] || icon_src="./res/icon.png"
+
     local size
     for size in 16 32 64 128 256 512 1024; do
-        try "$im" ./res/icon.png -resize "${size}x${size}" "$iconset_dir/app_icon_${size}.png"
+        try "$im" "$icon_src" -resize "${size}x${size}" "$iconset_dir/app_icon_${size}.png"
         if [ -d "./macos/Runner/Assets.xcassets/AppIcon.appiconset" ]; then
-            try "$im" ./res/icon.png -resize "${size}x${size}" "./macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_${size}.png"
+            try "$im" "$icon_src" -resize "${size}x${size}" "./macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_${size}.png"
         fi
     done
 
-    try "$im" ./res/icon.png -resize 128x128 ./res/mac-icon.png
-    try "$im" ./res/icon.png -resize 22x22 -colorspace gray -alpha set -background none \
+    try "$im" "$icon_src" -resize 128x128 ./res/mac-icon.png
+    try "$im" "$icon_src" -resize 22x22 -colorspace gray -alpha set -background none \
         -channel A -evaluate set 100% ./res/mac-tray-dark-x2.png
-    try "$im" ./res/icon.png -resize 22x22 -negate -colorspace gray -alpha set -background none \
+    try "$im" "$icon_src" -resize 22x22 -negate -colorspace gray -alpha set -background none \
         -channel A -evaluate set 100% ./res/mac-tray-light-x2.png
 
     # Vector asset used by the Flutter UI.
