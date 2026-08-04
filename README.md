@@ -15,8 +15,9 @@ If you would like to host the generator yourself, see [here](setup.md)
 
 Beyond the original "dispatch a GitHub Actions workflow" flow, this fork adds a
 **containerised build system**, a way to **build entirely locally** (no GitHub),
-a **batch scheduler** to queue several platforms at once, and a **native Windows
-build** for a Hyper-V VM. Everything below is documented in depth in
+a **batch scheduler** to queue several platforms at once, and **native builds
+for the two platforms Docker can't reach** — Windows in a Hyper-V VM and macOS
+on a Mac. Everything below is documented in depth in
 [`docs/BUILDS.md`](docs/BUILDS.md); this section is the quick reference.
 
 > **Platform support:** Linux, Windows and Android can be built with Docker
@@ -45,6 +46,10 @@ configuration **once**, and hit **Schedule builds**. You land on a live
 dashboard that polls every build until it finishes, with per-platform status,
 a build-log link and download links.
 
+A **macOS** card appears too when the app runs on a Mac with
+`BUILD_ENGINE=local` — that build runs natively instead of in a container
+(see #5).
+
 ### 2. Local builds with `scripts/rdbuild.sh` (no GitHub)
 
 Local-first: it builds the toolchain image on your machine the first time and
@@ -66,6 +71,8 @@ scripts/rdbuild.sh --config build.json --platforms linux --rebuild-image
 Artifacts land in `./output/<platform>/`. Copy `scripts/config.example.json` to
 start your own `build.json`. On **Docker Desktop / WSL2**, Linux and Android
 build fine; Windows needs a Windows host in "Windows containers" mode (see #4).
+Run the same command **on a Mac** and `--platforms macos` is built natively
+rather than in Docker (see #5), so `--platforms linux,macos` does both at once.
 
 ### 3. Run the web app in local mode (`BUILD_ENGINE=local`)
 
