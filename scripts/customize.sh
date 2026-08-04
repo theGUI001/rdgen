@@ -186,11 +186,10 @@ customize_android() {
 
 ensure_icon() {
     mkdir -p ./res
-    if [ ! -f ./res/icon.png ]; then
-        local raw_icon="${iconfile:-${iconbase64:-}}"
-        if [ -n "$raw_icon" ] && [ "$raw_icon" != "false" ]; then
-            log "extracting custom icon from base64"
-            python3 -c "
+    local raw_icon="${iconfile:-${iconbase64:-}}"
+    if [ -n "$raw_icon" ] && [ "$raw_icon" != "false" ]; then
+        log "extracting custom icon from base64"
+        python3 -c "
 import base64
 s = '''$raw_icon'''
 if ',' in s:
@@ -198,20 +197,18 @@ if ',' in s:
 with open('./res/icon.png', 'wb') as f:
     f.write(base64.b64decode(s.strip()))
 " 2>/dev/null || true
-        elif [ "${iconlink_url:-false}" != "false" ] && [ -n "${iconlink_url:-}" ]; then
-            fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 1
-        fi
+    elif [ "${iconlink_url:-false}" != "false" ] && [ -n "${iconlink_url:-}" ]; then
+        fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 1
     fi
     [ -f ./res/icon.png ]
 }
 
 ensure_logo() {
     mkdir -p ./res
-    if [ ! -f ./res/logo.png ]; then
-        local raw_logo="${logofile:-${logobase64:-}}"
-        if [ -n "$raw_logo" ] && [ "$raw_logo" != "false" ]; then
-            log "extracting custom logo from base64"
-            python3 -c "
+    local raw_logo="${logofile:-${logobase64:-}}"
+    if [ -n "$raw_logo" ] && [ "$raw_logo" != "false" ]; then
+        log "extracting custom logo from base64"
+        python3 -c "
 import base64
 s = '''$raw_logo'''
 if ',' in s:
@@ -219,11 +216,10 @@ if ',' in s:
 with open('./res/logo.png', 'wb') as f:
     f.write(base64.b64decode(s.strip()))
 " 2>/dev/null || true
-        elif [ "${logolink_url:-false}" != "false" ] && [ -n "${logolink_url:-}" ]; then
-            fetch_png "${logolink_url}" "${logolink_file:-logo.png}" "${logolink_uuid:-$uuid}" ./res/logo.png || return 1
-        elif [ -f ./res/icon.png ]; then
-            cp ./res/icon.png ./res/logo.png
-        fi
+    elif [ "${logolink_url:-false}" != "false" ] && [ -n "${logolink_url:-}" ]; then
+        fetch_png "${logolink_url}" "${logolink_file:-logo.png}" "${logolink_uuid:-$uuid}" ./res/logo.png || return 1
+    elif [ -f ./res/icon.png ]; then
+        cp ./res/icon.png ./res/logo.png
     fi
     [ -f ./res/logo.png ]
 }
