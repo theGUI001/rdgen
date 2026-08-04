@@ -336,14 +336,26 @@ apply_icon_macos() {
     local im
     im="$(magick_bin)" || { warn "imagemagick missing, skipping macOS icons"; return 0; }
 
+    # Run launcher icons step FIRST so it does not overwrite custom assets later.
+    (
+        cd ./flutter || exit 0
+        try flutter pub get
+        try dart run flutter_launcher_icons || true
+    )
+
     local iconset_dir="./flutter/macos/Runner/Assets.xcassets/AppIcon.appiconset"
     mkdir -p "$iconset_dir" ./res ./flutter/assets
-
+    if [ -d "./macos/Runner/Assets.xcassets/AppIcon.appiconset" ]; then
+        mkdir -p "./macos/Runner/Assets.xcassets/AppIcon.appiconset"
+    fi
 
     log "generating macOS icon assets"
     local size
     for size in 16 32 64 128 256 512 1024; do
         try "$im" ./res/icon.png -resize "${size}x${size}" "$iconset_dir/app_icon_${size}.png"
+        if [ -d "./macos/Runner/Assets.xcassets/AppIcon.appiconset" ]; then
+            try "$im" ./res/icon.png -resize "${size}x${size}" "./macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_${size}.png"
+        fi
     done
 
     try "$im" ./res/icon.png -resize 128x128 ./res/mac-icon.png
@@ -379,6 +391,9 @@ apply_icon_macos() {
   "info": {"version": 1, "author": "xcode"}
 }
 JSON
+    if [ -d "./macos/Runner/Assets.xcassets/AppIcon.appiconset" ]; then
+        cp "$iconset_dir/Contents.json" "./macos/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json"
+    fi
 
     # AppIcon.icns via iconutil (macOS only).
     if command -v iconutil >/dev/null 2>&1; then
@@ -395,13 +410,10 @@ JSON
         try cp "$iconset_dir/app_icon_512.png"  ./iconset.iconset/icon_512x512.png
         try cp "$iconset_dir/app_icon_1024.png" ./iconset.iconset/icon_512x512@2x.png
         try iconutil -c icns ./iconset.iconset -o ./flutter/macos/Runner/AppIcon.icns
+        if [ -d "./macos/Runner" ]; then
+            try cp ./flutter/macos/Runner/AppIcon.icns ./macos/Runner/AppIcon.icns
+        fi
         rm -rf ./iconset.iconset
     fi
-
-    # Regenerate the in-app launcher icons from the new asset.
-    (
-        cd ./flutter || exit 0
-        try flutter pub get
-        try dart run flutter_launcher_icons
-    )
 }
+
