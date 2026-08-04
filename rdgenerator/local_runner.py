@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -55,7 +56,20 @@ def _run(uuid_val, platform, work_dir, config_path):
         platform == 'windows'
         and getattr(settings, 'LOCAL_WINDOWS_NATIVE', os.name == 'nt')
     )
-    if is_windows_native:
+    is_macos_native = (
+        platform == 'macos'
+        and getattr(settings, 'LOCAL_MACOS_NATIVE', sys.platform == 'darwin')
+    )
+    if is_macos_native:
+        # Apple's toolchain cannot run in a container, so macOS always builds
+        # natively — on this Mac (bare metal or a macOS VM).
+        script = repo_root / 'scripts' / 'macos' / 'build-macos-native.sh'
+        cmd = [
+            'bash', str(script),
+            '--config', str(config_path),
+            '--output', str(out_dir / 'macos'),
+        ]
+    elif is_windows_native:
         # Native Windows build (e.g. inside a Hyper-V VM): no Docker.
         script = repo_root / 'scripts' / 'windows' / 'build-windows-native.ps1'
         cmd = [
@@ -101,7 +115,7 @@ def start_local_build(uuid_val, platform, config):
 
     Args:
         uuid_val: the run uuid (also the GithubRun uuid).
-        platform: 'linux' | 'android' | 'windows'.
+        platform: 'linux' | 'android' | 'windows' | 'macos' (macOS needs a Mac host).
         config: dict of build.json values (see scripts/config.example.json).
 
     Returns:
@@ -115,7 +129,16 @@ def start_local_build(uuid_val, platform, config):
             "success": False,
             "error": (
                 f"Platform '{platform}' is not enabled for local builds "
-                f"(LOCAL_BUILD_PLATFORMS={allowed}). macOS/iOS need an Apple host."
+                f"(LOCAL_BUILD_PLATFORMS={allowed})."
+            ),
+            "status_code": 400,
+        }
+    if platform == 'macos' and sys.platform != 'darwin':
+        return {
+            "success": False,
+            "error": (
+                "macOS builds need an Apple host: run this app (or "
+                "scripts/macos/build-macos-native.sh) on a Mac or a macOS VM."
             ),
             "status_code": 400,
         }

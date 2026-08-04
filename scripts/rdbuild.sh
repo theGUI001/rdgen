@@ -15,8 +15,8 @@
 # Notes:
 #   * linux and android build on any Docker host, incl. Docker Desktop / WSL2.
 #   * windows requires a Windows host in "Windows containers" mode (not WSL2).
-#   * macos / ios cannot be built in Docker (Apple toolchain needs macOS) and
-#     are rejected with a clear message.
+#   * macos never uses Docker (Apple toolchain): on a Mac it is delegated to
+#     scripts/macos/build-macos-native.sh, elsewhere it is skipped.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -54,7 +54,10 @@ done
 if [ -n "$REGISTRY" ]; then LOCAL_MODE=0; else LOCAL_MODE=1; fi
 
 [ -n "$PLATFORMS" ] || { echo "error: --platforms is required" >&2; usage 1; }
-command -v docker >/dev/null || { echo "error: docker is not installed" >&2; exit 1; }
+# macOS is built natively, so Docker is only required for the other platforms.
+if [ "$(echo "$PLATFORMS" | tr ',' '\n' | tr -d ' ' | grep -cvx 'macos')" -gt 0 ]; then
+    command -v docker >/dev/null || { echo "error: docker is not installed" >&2; exit 1; }
+fi
 
 # Build the effective build.json = base config (if any) + CLI overrides.
 WORKDIR="$(mktemp -d)"
@@ -109,9 +112,30 @@ dockerfile_for() {
 build_platform() {
     local platform="$1"
     case "$platform" in
-        macos|ios)
-            echo "==> SKIP $platform: Apple platforms require a macOS host and cannot be built in Docker." >&2
-            echo "    Use the GitHub Actions macOS runner (generator-macos.yml) for these targets." >&2
+        macos)
+            # Apple's toolchain cannot run in a container, but it can run right
+            # here when this *is* a Mac — delegate to the native build.
+            if [ "$(uname -s)" = "Darwin" ]; then
+                local mcfg="$WORKDIR/build-macos.json"
+                python3 - "$EFFECTIVE" "$mcfg" <<'PY'
+import json, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src) as fh: cfg = json.load(fh)
+cfg["platform"] = "macos"
+with open(dst, "w") as fh: json.dump(cfg, fh, indent=2)
+PY
+                echo "==> Running native macOS build (output -> $OUTPUT_DIR/macos)"
+                "$REPO_ROOT/scripts/macos/build-macos-native.sh" \
+                    --config "$mcfg" --output "$OUTPUT_DIR/macos"
+                return $?
+            fi
+            echo "==> SKIP macos: Apple's toolchain cannot run in Docker and this is not a Mac." >&2
+            echo "    Run scripts/macos/build-macos-native.sh on a Mac (or macOS VM)," >&2
+            echo "    or use the GitHub Actions macOS runner (generator-macos.yml)." >&2
+            return 2
+            ;;
+        ios)
+            echo "==> SKIP ios: not supported by this build system (needs Xcode + provisioning)." >&2
             return 2
             ;;
         linux|android|windows) ;;
