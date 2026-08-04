@@ -190,13 +190,14 @@ ensure_icon() {
     if [ -n "$raw_icon" ] && [ "$raw_icon" != "false" ]; then
         log "extracting custom icon from base64"
         python3 -c "
-import base64
-s = '''$raw_icon'''
+import os, base64
+s = os.environ.get('iconfile') or os.environ.get('iconbase64') or ''
 if ',' in s:
     s = s.split(',', 1)[1]
-with open('./res/icon.png', 'wb') as f:
-    f.write(base64.b64decode(s.strip()))
-" 2>/dev/null || true
+if s.strip():
+    with open('./res/icon.png', 'wb') as f:
+        f.write(base64.b64decode(s.strip()))
+" || { warn "failed to decode icon base64"; return 1; }
     elif [ "${iconlink_url:-false}" != "false" ] && [ -n "${iconlink_url:-}" ]; then
         fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 1
     fi
@@ -209,13 +210,14 @@ ensure_logo() {
     if [ -n "$raw_logo" ] && [ "$raw_logo" != "false" ]; then
         log "extracting custom logo from base64"
         python3 -c "
-import base64
-s = '''$raw_logo'''
+import os, base64
+s = os.environ.get('logofile') or os.environ.get('logobase64') or ''
 if ',' in s:
     s = s.split(',', 1)[1]
-with open('./res/logo.png', 'wb') as f:
-    f.write(base64.b64decode(s.strip()))
-" 2>/dev/null || true
+if s.strip():
+    with open('./res/logo.png', 'wb') as f:
+        f.write(base64.b64decode(s.strip()))
+" || { warn "failed to decode logo base64"; return 1; }
     elif [ "${logolink_url:-false}" != "false" ] && [ -n "${logolink_url:-}" ]; then
         fetch_png "${logolink_url}" "${logolink_file:-logo.png}" "${logolink_uuid:-$uuid}" ./res/logo.png || return 1
     elif [ -f ./res/icon.png ]; then
@@ -406,6 +408,7 @@ JSON
         try cp "$iconset_dir/app_icon_512.png"  ./iconset.iconset/icon_512x512.png
         try cp "$iconset_dir/app_icon_1024.png" ./iconset.iconset/icon_512x512@2x.png
         try iconutil -c icns ./iconset.iconset -o ./flutter/macos/Runner/AppIcon.icns
+        try cp ./flutter/macos/Runner/AppIcon.icns ./res/AppIcon.icns 2>/dev/null || true
         if [ -d "./macos/Runner" ]; then
             try cp ./flutter/macos/Runner/AppIcon.icns ./macos/Runner/AppIcon.icns
         fi
