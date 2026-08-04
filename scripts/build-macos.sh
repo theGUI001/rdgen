@@ -138,7 +138,7 @@ main() {
     fi
 
     # Apple silicon needs a higher deployment target than the default.
-    if [ "$arch" = "arm64" ]; then
+    if [ "$arch" = "aarch64" ] || [ "$arch" = "arm64" ]; then
         tsed -e "s/MACOSX_DEPLOYMENT_TARGET\=[0-9]*.[0-9]*/MACOSX_DEPLOYMENT_TARGET=${MIN_MACOS_VERSION}/" build.py
         tsed -e "s/platform :osx, '.*'/platform :osx, '${MIN_MACOS_VERSION}'/" flutter/macos/Podfile
         tsed -e "s/osx_minimum_system_version = \"[0-9]*.[0-9]*\"/osx_minimum_system_version = \"${MIN_MACOS_VERSION}\"/" Cargo.toml

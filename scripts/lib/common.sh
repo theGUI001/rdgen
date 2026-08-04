@@ -183,7 +183,6 @@ generate_bridge() {
     log "generating flutter_rust_bridge files"
     (
         cd "$RD_SRC/flutter" || die "flutter dir missing"
-        tsed -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' pubspec.yaml
         flutter pub get
     )
     (

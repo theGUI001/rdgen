@@ -21,6 +21,50 @@ customize_common() {
     tsed -e "s|OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=|${key}|" ./libs/hbb_common/src/config.rs
     tsed -e "s|https://admin.rustdesk.com|${apiServer}|" ./src/common.rs
 
+    # Patch scrap build.rs to include cfg in regex and use bindgen CLI if available
+    if [ -f ./libs/scrap/build.rs ]; then
+        python3 -c "
+f = './libs/scrap/build.rs'
+c = open(f).read()
+c = c.replace('^(aom|AOM|OBU|AV1).*', '^(aom|AOM|OBU|AV1|cfg).*')
+old_fn = '''fn generate_bindings(
+    ffi_header: &Path,
+    include_paths: &[PathBuf],
+    ffi_rs: &Path,
+    exact_file: &Path,
+    regex: &str,
+) {'''
+new_fn = '''fn generate_bindings(
+    ffi_header: &Path,
+    include_paths: &[PathBuf],
+    ffi_rs: &Path,
+    exact_file: &Path,
+    regex: &str,
+) {
+    let mut cmd = std::process::Command::new(\"bindgen\");
+    cmd.arg(ffi_header)
+       .arg(\"--allowlist-type\").arg(regex)
+       .arg(\"--allowlist-var\").arg(regex)
+       .arg(\"--allowlist-function\").arg(regex)
+       .arg(\"--rustified-enum\").arg(regex)
+       .arg(\"--output\").arg(ffi_rs)
+       .arg(\"--no-layout-tests\")
+       .arg(\"--no-doc-comments\")
+       .arg(\"--\");
+    for dir in include_paths {
+        cmd.arg(format!(\"-I{}\", dir.display()));
+    }
+    if let Ok(status) = cmd.status() {
+        if status.success() {
+            fs::copy(ffi_rs, exact_file).ok();
+            return;
+        }
+    }'''
+c = c.replace(old_fn, new_fn)
+open(f, 'w').write(c)
+"
+    fi
+
     # --- allow custom.txt (bypass signature check) -------------------------
     local allow
     if allow="$(patch_path allowCustom.py)"; then
