@@ -205,6 +205,29 @@ with open('./res/icon.png', 'wb') as f:
     [ -f ./res/icon.png ]
 }
 
+ensure_logo() {
+    mkdir -p ./res
+    if [ ! -f ./res/logo.png ]; then
+        local raw_logo="${logofile:-${logobase64:-}}"
+        if [ -n "$raw_logo" ] && [ "$raw_logo" != "false" ]; then
+            log "extracting custom logo from base64"
+            python3 -c "
+import base64
+s = '''$raw_logo'''
+if ',' in s:
+    s = s.split(',', 1)[1]
+with open('./res/logo.png', 'wb') as f:
+    f.write(base64.b64decode(s.strip()))
+" 2>/dev/null || true
+        elif [ "${logolink_url:-false}" != "false" ] && [ -n "${logolink_url:-}" ]; then
+            fetch_png "${logolink_url}" "${logolink_file:-logo.png}" "${logolink_uuid:-$uuid}" ./res/logo.png || return 1
+        elif [ -f ./res/icon.png ]; then
+            cp ./res/icon.png ./res/logo.png
+        fi
+    fi
+    [ -f ./res/logo.png ]
+}
+
 # Replace the app icon from a downloaded PNG or base64.
 apply_icon() {
     ensure_icon || return 0

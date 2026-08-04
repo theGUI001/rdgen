@@ -156,13 +156,23 @@ main() {
     release_dir="$(find_app_bundle)" || die "no .app bundle produced — check the build log above"
     log "app bundle: $release_dir/${appname}.app"
 
-    # Drop in the custom logo the Flutter UI shows, if one was configured.
-    if [ "${logolink_url}" != "false" ] && [ -n "${logolink_url}" ]; then
-        local assets_dir="$release_dir/${appname}.app/Contents/Frameworks/App.framework/Versions/Current/Resources/flutter_assets/assets"
-        mkdir -p "$assets_dir"
-        fetch_png "${logolink_url}" "${logolink_file:-logo.png}" "${logolink_uuid:-$uuid}" \
-            "$assets_dir/logo.png" || true
+    # Drop in the custom logo and icons into the built bundle
+    local assets_dir="$release_dir/${appname}.app/Contents/Frameworks/App.framework/Versions/Current/Resources/flutter_assets/assets"
+    mkdir -p "$assets_dir"
+    if [ -f "./res/logo.png" ]; then
+        cp "./res/logo.png" "$assets_dir/logo.png"
     fi
+    if [ -f "./res/icon.png" ]; then
+        cp "./res/icon.png" "$assets_dir/icon.png"
+    fi
+    if [ -f "./flutter/macos/Runner/AppIcon.icns" ]; then
+        log "copying custom AppIcon.icns to app bundle resources"
+        cp -f "./flutter/macos/Runner/AppIcon.icns" "$release_dir/${appname}.app/Contents/Resources/AppIcon.icns"
+        cp -f "./flutter/macos/Runner/AppIcon.icns" "$release_dir/${appname}.app/Contents/Resources/icon.icns" 2>/dev/null || true
+        touch "$release_dir/${appname}.app/Contents/Resources/AppIcon.icns" 2>/dev/null || true
+    fi
+    touch "$release_dir/${appname}.app"
+
 
     sign_app "$release_dir/${appname}.app"
 
