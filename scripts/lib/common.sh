@@ -101,7 +101,9 @@ PY
     export platform version server key apiServer appname filename compname \
            androidappid urlLink downloadLink custom uuid delayFix xOffline \
            hidecm removeNewVersionNotif rdgen iconlink_url logolink_url \
-           privacylink_url upload_url status_url token
+           privacylink_url upload_url status_url token \
+           iconfile iconbase64 logofile logobase64 privacyfile privacybase64
+
 
     log "platform=$platform version=$version appname=$appname filename=$filename"
 }
