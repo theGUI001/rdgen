@@ -37,9 +37,37 @@ function Find-MSBuild {
     return (Find-Tool 'MSBuild.exe' @('C:\BuildTools\MSBuild\Current\Bin\MSBuild.exe'))
 }
 
-$BashExe   = Find-Tool 'bash.exe'   @('C:\mingit\usr\bin\bash.exe', "$env:ProgramFiles\Git\bin\bash.exe")
-$NugetExe  = Find-Tool 'nuget.exe'  @('C:\tools\nuget.exe')
+function Load-VsDevEnv {
+    $vcvars = Find-Tool 'vcvarsall.bat' @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Professional\VC\Auxiliary\Build\vcvarsall.bat",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat"
+    )
+    if (-not $vcvars) {
+        $found = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvarsall.bat" -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { $vcvars = $found.FullName }
+    }
+    if ($vcvars) {
+        Log "Loading MSVC build environment from $vcvars"
+        $envLines = cmd.exe /c "call `"$vcvars`" x64 & set"
+        foreach ($line in $envLines) {
+            if ($line -match "^([^=]+)=(.*)$") {
+                $varName = $matches[1]
+                $varValue = $matches[2]
+                [Environment]::SetEnvironmentVariable($varName, $varValue, "Process")
+            }
+        }
+    } else {
+        Warn "vcvarsall.bat not found; MSVC build environment might be missing INCLUDE/LIB variables"
+    }
+}
+
+$BashExe   = Find-Tool 'bash.exe'   @('C:\mingit\usr\bin\bash.exe', "$env:ProgramFiles\Git\bin\bash.exe", "$env:ProgramFiles\Git\usr\bin\bash.exe")
+$NugetExe  = Find-Tool 'nuget.exe'  @('C:\rdgen-tools\tools\nuget.exe', 'C:\tools\nuget.exe')
 $MSBuildExe = Find-MSBuild
+
+Load-VsDevEnv
 
 if (-not (Test-Path $Config)) { throw "config not found: $Config" }
 $cfg = Get-Content $Config -Raw | ConvertFrom-Json
@@ -113,8 +141,8 @@ $env:urlLink=$urlLink; $env:downloadLink=$downloadLink; $env:custom=$custom
 $env:delayFix = if ($delayFix) { 'true' } else { 'false' }
 $env:removeNewVersionNotif = if ($removeNotif) { 'true' } else { 'false' }
 $env:xOffline=(Cfg 'xOffline' 'false'); $env:hidecm=(Cfg 'hidecm' 'false')
-$env:iconlink_url='false'; $env:logolink_url='false'; $env:privacylink_url='false'
-$env:RD_PATCHES=$Patches; $env:uuid=$uuid; $env:version=$version
+$env:iconlink_url=(Cfg 'iconlink_url' 'false'); $env:logolink_url=(Cfg 'logolink_url' 'false'); $env:privacylink_url=(Cfg 'privacylink_url' 'false')
+$env:RD_PATCHES=$Patches; $env:uuid=$uuid; $env:version=$version; $env:RD_CONFIG=$Config
 
 # customize.sh lives next to this script (works in-container and natively).
 $customizeSh = Join-Path $PSScriptRoot 'customize.sh'
@@ -128,11 +156,13 @@ if ($BashExe) {
     Try-Step { (Get-Content ./libs/hbb_common/src/config.rs) -replace 'OeVuKk5nlHiXp\+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=', $key | Set-Content ./libs/hbb_common/src/config.rs }
 }
 
+Report 'Processing custom icons'
+Try-Step { python (Join-Path $PSScriptRoot 'process_icons.py') $Config $Src }
+
 # --- flutter engine + bridge ------------------------------------------------
 Report 'Generating flutter-rust bridge'
 Try-Step {
     Push-Location flutter
-    (Get-Content pubspec.yaml) -replace 'extended_text: 14.0.0', 'extended_text: 13.0.0' | Set-Content pubspec.yaml
     flutter pub get
     Pop-Location
     flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart --c-output ./flutter/macos/Runner/bridge_generated.h
@@ -140,9 +170,21 @@ Try-Step {
 
 # --- vcpkg ------------------------------------------------------------------
 Report 'Installing vcpkg dependencies'
-if (-not $env:VCPKG_ROOT) { $env:VCPKG_ROOT = 'C:\vcpkg' }
+if (Test-Path 'C:\rdgen-tools\vcpkg\vcpkg.exe') {
+    $env:VCPKG_ROOT = 'C:\rdgen-tools\vcpkg'
+} elseif (Test-Path 'C:\vcpkg\vcpkg.exe') {
+    $env:VCPKG_ROOT = 'C:\vcpkg'
+}
+if (Test-Path 'C:\rdgen-tools\tools') {
+    $env:PATH = "C:\rdgen-tools\tools;$env:PATH"
+}
 $vcpkgExe = Join-Path $env:VCPKG_ROOT 'vcpkg.exe'
-Try-Step { & $vcpkgExe install --triplet x64-windows-static --x-install-root (Join-Path $env:VCPKG_ROOT 'installed') }
+$overlayPorts = Join-Path $Src 'res\vcpkg'
+if (Test-Path $overlayPorts) {
+    Try-Step { & $vcpkgExe install --triplet x64-windows-static --host-triplet x64-windows-static --overlay-ports="$overlayPorts" --x-install-root (Join-Path $env:VCPKG_ROOT 'installed') }
+} else {
+    Try-Step { & $vcpkgExe install --triplet x64-windows-static --host-triplet x64-windows-static --x-install-root (Join-Path $env:VCPKG_ROOT 'installed') }
+}
 
 # --- build ------------------------------------------------------------------
 Report 'Compiling RustDesk (this is the long part)'

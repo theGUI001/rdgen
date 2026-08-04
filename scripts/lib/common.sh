@@ -55,8 +55,11 @@ load_config() {
     local config="${1:-${RD_CONFIG:-$RD_WORK/build.json}}"
     [ -f "$config" ] || die "config not found: $config (see scripts/config.example.json)"
 
+    local py_cmd="python3"
+    command -v python3 >/dev/null 2>&1 || py_cmd="python"
+
     local exports
-    exports="$(python3 - "$config" <<'PY'
+    exports="$("$py_cmd" - "$config" <<'PY'
 import json, shlex, sys
 
 with open(sys.argv[1]) as fh:

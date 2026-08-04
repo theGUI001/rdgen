@@ -10,11 +10,14 @@
 # working directory to be the RustDesk source tree.
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/common.sh
-. "$(dirname "$0")/lib/common.sh"
+. "$SCRIPT_DIR/lib/common.sh"
 
 customize_common() {
     log "applying common customisations"
+    local py_bin="python3"
+    command -v python3 >/dev/null 2>&1 || py_bin="python"
 
     # --- server / key / api endpoint ---------------------------------------
     tsed -e "s|rs-ny.rustdesk.com|${server}|" ./libs/hbb_common/src/config.rs
@@ -68,7 +71,7 @@ open(f, 'w').write(c)
     # --- allow custom.txt (bypass signature check) -------------------------
     local allow
     if allow="$(patch_path allowCustom.py)"; then
-        try python3 "$allow"
+        try "$py_bin" "$allow"
     else
         # Fallback: strip the embedded KEY + verify block directly.
         tsed -e '/const KEY:/,/};/d' ./src/common.rs
@@ -78,7 +81,7 @@ open(f, 'w').write(c)
     if rmtip="$(patch_path removeSetupServerTip.diff)"; then
         try git apply "$rmtip"
     fi
-    printf '%s' "${custom}" > ./custom_.txt
+    printf '%s' "${custom:-}" > ./custom_.txt
 
     # --- app name / whitelabel ---------------------------------------------
     if [ "${appname}" != "rustdesk" ]; then
@@ -184,60 +187,25 @@ customize_android() {
     tsed -e 's/bind.mainGetLocalOption(key:\s*"show-scam-warning")/"N"/g' ./flutter/lib/mobile/pages/server_page.dart
 }
 
-ensure_icon() {
-    mkdir -p ./res
-    local raw_icon="${iconfile:-${iconbase64:-}}"
-    if [ -n "$raw_icon" ] && [ "$raw_icon" != "false" ]; then
-        log "extracting custom icon from base64"
-        python3 -c "
-import os, base64
-s = os.environ.get('iconfile') or os.environ.get('iconbase64') or ''
-if ',' in s:
-    s = s.split(',', 1)[1]
-if s.strip():
-    with open('./res/icon.png', 'wb') as f:
-        f.write(base64.b64decode(s.strip()))
-" || { warn "failed to decode icon base64"; return 1; }
-    elif [ "${iconlink_url:-false}" != "false" ] && [ -n "${iconlink_url:-}" ]; then
-        fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || return 1
-    fi
-    [ -f ./res/icon.png ]
-}
-
-ensure_logo() {
-    mkdir -p ./res
-    local raw_logo="${logofile:-${logobase64:-}}"
-    if [ -n "$raw_logo" ] && [ "$raw_logo" != "false" ]; then
-        log "extracting custom logo from base64"
-        python3 -c "
-import os, base64
-s = os.environ.get('logofile') or os.environ.get('logobase64') or ''
-if ',' in s:
-    s = s.split(',', 1)[1]
-if s.strip():
-    with open('./res/logo.png', 'wb') as f:
-        f.write(base64.b64decode(s.strip()))
-" || { warn "failed to decode logo base64"; return 1; }
-    elif [ "${logolink_url:-false}" != "false" ] && [ -n "${logolink_url:-}" ]; then
-        fetch_png "${logolink_url}" "${logolink_file:-logo.png}" "${logolink_uuid:-$uuid}" ./res/logo.png || return 1
-    elif [ -f ./res/icon.png ]; then
-        cp ./res/icon.png ./res/logo.png
-    fi
-    [ -f ./res/logo.png ]
-}
-
-# Replace the app icon from a downloaded PNG or base64.
+# Replace the app icon from a downloaded or embedded PNG.
 apply_icon() {
-    ensure_icon || return 0
+    log "processing icon assets"
+    local py_bin="python3"
+    command -v python3 >/dev/null 2>&1 || py_bin="python"
+    try "$py_bin" "$SCRIPT_DIR/process_icons.py" "${RD_CONFIG:-build.json}" "$PWD"
+
+    [ "${iconlink_url:-false}" != "false" ] && [ -n "${iconlink_url:-}" ] && fetch_png "${iconlink_url}" "${iconlink_file:-icon.png}" "${iconlink_uuid:-$uuid}" ./res/icon.png || true
+
     local im
-    im="$(magick_bin)" || { warn "imagemagick missing, skipping icon"; return 0; }
-    log "regenerating icon assets"
-    try "$im" ./res/icon.png -define icon:auto-resize=256,64,48,32,16 ./res/icon.ico
-    try cp ./res/icon.ico ./res/tray-icon.ico
-    try "$im" ./res/icon.png -resize 32x32 ./res/32x32.png
-    try "$im" ./res/icon.png -resize 64x64 ./res/64x64.png
-    try "$im" ./res/icon.png -resize 128x128 ./res/128x128.png
-    try "$im" ./res/128x128.png -resize 200% ./res/128x128@2x.png
+    if im="$(magick_bin)" && [ -f ./res/icon.png ]; then
+        log "regenerating icon assets via ImageMagick"
+        try "$im" ./res/icon.png -define icon:auto-resize=256,64,48,32,16 ./res/icon.ico
+        try cp ./res/icon.ico ./res/tray-icon.ico
+        try "$im" ./res/icon.png -resize 32x32 ./res/32x32.png
+        try "$im" ./res/icon.png -resize 64x64 ./res/64x64.png
+        try "$im" ./res/icon.png -resize 128x128 ./res/128x128.png
+        try "$im" ./res/128x128.png -resize 200% ./res/128x128@2x.png
+    fi
 }
 
 
@@ -256,10 +224,13 @@ customize_macos() {
     local bundle_id="com.${bundle_slug}.app"
     log "bundle identifier: ${bundle_id}"
 
+    local py_bin="python3"
+    command -v python3 >/dev/null 2>&1 || py_bin="python"
+
     if [ "${appname}" != "rustdesk" ]; then
         # Info.plist keys and their <string> live on separate lines, so a plain
         # sed does not match; rewrite the value that follows each key instead.
-        try python3 - ./flutter/macos/Runner/Info.plist "${appname}" "${bundle_id}" <<'PY'
+        try "$py_bin" - ./flutter/macos/Runner/Info.plist "${appname}" "${bundle_id}" <<'PY'
 import re, sys
 
 path, appname, bundle_id = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -328,11 +299,19 @@ PY
 }
 
 # macOS icon pipeline: app icon set, AppIcon.icns, menu-bar tray icons and the
+# macOS icon pipeline: app icon set, AppIcon.icns, menu-bar tray icons and the
 # SVG the Flutter assets expect. Requires imagemagick + potrace.
 apply_icon_macos() {
+<<<<<<< HEAD
     ensure_icon || return 0
     local im
     im="$(magick_bin)" || { warn "imagemagick missing, skipping macOS icons"; return 0; }
+=======
+    log "generating macOS icon assets"
+    local py_bin="python3"
+    command -v python3 >/dev/null 2>&1 || py_bin="python"
+    try "$py_bin" "$SCRIPT_DIR/process_icons.py" "${RD_CONFIG:-build.json}" "$PWD"
+>>>>>>> 706caba (fix(windows): resolve native Windows build failures and add Base64 icon processor)
 
     # Run launcher icons step FIRST so it does not overwrite custom assets later.
     (
@@ -347,6 +326,7 @@ apply_icon_macos() {
         mkdir -p "./macos/Runner/Assets.xcassets/AppIcon.appiconset"
     fi
 
+<<<<<<< HEAD
     log "generating macOS squircle icon assets"
     local macos_canvas="./res/icon_macos_squircle.png"
     try "$im" ./res/icon.png -resize 824x824 ./res/resized_824.png
@@ -371,6 +351,23 @@ apply_icon_macos() {
         -channel A -evaluate set 100% ./res/mac-tray-dark-x2.png
     try "$im" "$icon_src" -resize 22x22 -negate -colorspace gray -alpha set -background none \
         -channel A -evaluate set 100% ./res/mac-tray-light-x2.png
+=======
+    [ -f ./res/icon.png ] || return 0
+
+    local im
+    if im="$(magick_bin)"; then
+        local size
+        for size in 16 32 64 128 256 512 1024; do
+            try "$im" ./res/icon.png -resize "${size}x${size}" "$iconset_dir/app_icon_${size}.png"
+        done
+
+        try "$im" ./res/icon.png -resize 128x128 ./res/mac-icon.png
+        try "$im" ./res/icon.png -resize 22x22 -colorspace gray -alpha set -background none \
+            -channel A -evaluate set 100% ./res/mac-tray-dark-x2.png
+        try "$im" ./res/icon.png -resize 22x22 -negate -colorspace gray -alpha set -background none \
+            -channel A -evaluate set 100% ./res/mac-tray-light-x2.png
+    fi
+>>>>>>> 706caba (fix(windows): resolve native Windows build failures and add Base64 icon processor)
 
     # Vector asset used by the Flutter UI.
     if command -v potrace >/dev/null 2>&1; then
