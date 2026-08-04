@@ -53,6 +53,11 @@ log() { printf '\033[1;32m[rdgen-native]\033[0m %s\n' "$*"; }
 [ -n "$CONFIG" ] || { echo "error: --config is required" >&2; usage 1; }
 [ -f "$CONFIG" ] || { echo "error: config not found: $CONFIG" >&2; exit 1; }
 
+mkdir -p "$OUTPUT"
+OUTPUT="$(cd "$OUTPUT" && pwd)"
+CONFIG="$(cd "$(dirname "$CONFIG")" && pwd)/$(basename "$CONFIG")"
+
+
 if [ "$RUN_SETUP" -eq 1 ]; then
     log "running toolchain setup..."
     "$SCRIPT_DIR/setup-toolchain.sh" --install-root "$INSTALL_ROOT"
