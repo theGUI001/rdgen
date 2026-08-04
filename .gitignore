@@ -9,3 +9,4 @@ exe/
 temp_zips/
 local_builds/
 output/
+.DS_Store
