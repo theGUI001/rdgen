@@ -1,0 +1,30 @@
+{
+  "platform": "linux",
+  "version": "1.4.9",
+  "appname": "rustdesk",
+  "filename": "mycompany-remote",
+  "compname": "My Company Ltd",
+  "server": "rs.mycompany.com",
+  "key": "OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=",
+  "apiServer": "https://api.mycompany.com",
+  "androidappid": "com.mycompany.remote",
+  "urlLink": "https://mycompany.com",
+  "downloadLink": "https://mycompany.com/download",
+  "custom": "",
+  "delayFix": true,
+  "xOffline": false,
+  "hidecm": false,
+  "removeNewVersionNotif": false,
+  "android_abis": "arm64-v8a,armeabi-v7a,x86_64",
+
+  "_comment_upload": "Optional. Set these to push the built artifacts back to a running rdgen server instead of leaving them in ./output.",
+  "upload_url": "",
+  "status_url": "",
+  "token": "",
+  "uuid": "local-build",
+
+  "_comment_icon": "Optional PNG customisation, served by an rdgen instance.",
+  "iconlink_url": "false",
+  "logolink_url": "false",
+  "privacylink_url": "false"
+}

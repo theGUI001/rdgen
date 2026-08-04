@@ -2,3 +2,10 @@
 db.sqlite3
 gunicorn.conf
 .venv
+
+# Runtime build/output directories (never commit build artifacts)
+png/
+exe/
+temp_zips/
+local_builds/
+output/

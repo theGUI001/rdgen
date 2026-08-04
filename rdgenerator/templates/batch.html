@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustDesk Batch Build Scheduler</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Roboto', sans-serif; background:#000; color:#e0e0e0; margin:0; padding:20px; }
+        h1 { color:#fff; text-align:center; }
+        .lead { text-align:center; color:#9aa; max-width:760px; margin:0 auto 24px; line-height:1.5; }
+        .wrap { max-width:900px; margin:0 auto; }
+        .section { background:#111; border-radius:8px; padding:20px; margin-bottom:20px; box-shadow:0 4px 6px rgba(0,0,0,.3); }
+        h2 { color:#fff; margin-top:0; }
+        label { display:block; margin-bottom:5px; color:#bbb; }
+        input[type="text"], input[type="password"], select, textarea {
+            width:100%; padding:8px; margin-bottom:10px; background:#222; border:1px solid #444; border-radius:4px; color:#fff; box-sizing:border-box;
+        }
+        input[type="checkbox"], input[type="radio"] { margin-right:6px; }
+        button { background:#0077ff; color:#fff; border:none; padding:12px 24px; border-radius:4px; cursor:pointer; font-size:16px; transition:background .3s; }
+        button:hover { background:#0066cc; }
+        .platform-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:6px; }
+        .platform-card {
+            position:relative; background:#181818; border:2px solid #333; border-radius:10px; padding:18px; text-align:center; cursor:pointer; transition:all .2s; user-select:none;
+        }
+        .platform-card:hover { border-color:#2e52f7; }
+        .platform-card.active { border-color:#2e52f7; background:#12203f; }
+        .platform-card i { font-size:40px; display:block; margin-bottom:10px; color:#bbb; }
+        .platform-card.active i { color:#4d7bff; }
+        .platform-card .pname { font-weight:700; color:#fff; }
+        .platform-card .psub { font-size:.8em; color:#889; }
+        .platform-card input { display:none; }
+        .platform-card .check { position:absolute; top:8px; right:10px; color:#4d7bff; opacity:0; transition:opacity .2s; }
+        .platform-card.active .check { opacity:1; }
+        .note { background:#1a1a2a; border-left:3px solid #4d7bff; padding:10px 14px; border-radius:4px; color:#aab; font-size:.9em; margin-top:12px; }
+        .fields-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 20px; }
+        .fields-grid .full { grid-column:1 / -1; }
+        .field { margin-bottom:6px; }
+        .errorlist { color:#ff6b6b; list-style:none; padding:0; }
+        .toolbar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; }
+        .toolbar a { color:#4d7bff; text-decoration:none; }
+        .actions { text-align:center; margin:24px 0; }
+        .muted { color:#778; font-size:.85em; }
+        @media (max-width:640px){ .fields-grid{ grid-template-columns:1fr; } }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="toolbar">
+        <a href="/generator"><i class="fas fa-arrow-left"></i> Single build</a>
+        <span class="muted"><i class="fab fa-docker"></i> Docker-powered builds</span>
+    </div>
+    <h1><i class="fas fa-layer-group"></i> Batch Build Scheduler</h1>
+    <p class="lead">
+        Configure your custom RustDesk client once, then queue builds for several
+        operating systems back-to-back. Every build runs inside a Docker container
+        on GitHub Actions &mdash; no toolchain setup, no waiting between platforms.
+    </p>
+
+    {% if errors %}
+        <div class="section">
+            <ul class="errorlist">
+                {% for field, errs in errors.items %}
+                    {% for e in errs %}<li><strong>{{ field }}:</strong> {{ e }}</li>{% endfor %}
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    <form id="batchForm" action="/batch" method="post" enctype="multipart/form-data">
+        <div class="section">
+            <h2><i class="fas fa-desktop"></i> Target platforms</h2>
+            <p class="muted">Select one or more. Builds are queued in the order shown.</p>
+            <div class="platform-cards">
+                <label class="platform-card active" data-platform="linux">
+                    <input type="checkbox" name="platforms" value="linux" checked>
+                    <i class="fab fa-linux"></i>
+                    <span class="pname">Linux</span>
+                    <span class="psub">.deb / .rpm</span>
+                    <i class="fas fa-check-circle check"></i>
+                </label>
+                <label class="platform-card" data-platform="windows">
+                    <input type="checkbox" name="platforms" value="windows">
+                    <i class="fab fa-windows"></i>
+                    <span class="pname">Windows</span>
+                    <span class="psub">.exe / .msi (64-bit)</span>
+                    <i class="fas fa-check-circle check"></i>
+                </label>
+                <label class="platform-card" data-platform="android">
+                    <input type="checkbox" name="platforms" value="android">
+                    <i class="fab fa-android"></i>
+                    <span class="pname">Android</span>
+                    <span class="psub">.apk (per ABI)</span>
+                    <i class="fas fa-check-circle check"></i>
+                </label>
+            </div>
+            <div class="note">
+                <i class="fab fa-apple"></i> macOS and iOS are not shown: Apple's toolchain
+                cannot run in Docker, so they need a macOS host. Use the single-build page
+                with the macOS workflow for those targets.
+            </div>
+        </div>
+
+        <div class="section">
+            <h2><i class="fas fa-tag"></i> Batch details</h2>
+            <label for="batch_label">Batch label (optional, for your own reference)</label>
+            <input type="text" id="batch_label" name="batch_label" placeholder="e.g. Acme Corp v1.4.9 rollout">
+        </div>
+
+        <div class="section">
+            <h2><i class="fas fa-sliders-h"></i> Client configuration</h2>
+            <p class="muted">These settings apply to every platform in the batch.</p>
+            <div class="fields-grid">
+                {% for field in form %}
+                    {% if field.name != 'platform' %}
+                        <div class="field {% if field.field.widget.input_type == 'textarea' or field.name == 'defaultManual' or field.name == 'overrideManual' %}full{% endif %}">
+                            <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+                            {{ field }}
+                            {% if field.help_text %}<div class="muted">{{ field.help_text }}</div>{% endif %}
+                            {% if field.errors %}<ul class="errorlist">{% for e in field.errors %}<li>{{ e }}</li>{% endfor %}</ul>{% endif %}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button type="submit"><i class="fas fa-rocket"></i> Schedule builds</button>
+            <div class="muted" style="margin-top:10px;">You'll get a live dashboard for every queued build.</div>
+        </div>
+    </form>
+</div>
+
+<script>
+    // Toggle platform cards (the hidden checkbox is the source of truth).
+    document.querySelectorAll('.platform-card').forEach(function(card){
+        card.addEventListener('click', function(e){
+            // Let the native checkbox toggle, then sync the visual state.
+            setTimeout(function(){
+                var cb = card.querySelector('input[type=checkbox]');
+                card.classList.toggle('active', cb.checked);
+            }, 0);
+        });
+    });
+
+    document.getElementById('batchForm').addEventListener('submit', function(e){
+        var any = document.querySelectorAll('input[name=platforms]:checked').length > 0;
+        if (!any) {
+            e.preventDefault();
+            alert('Select at least one platform to build.');
+        }
+    });
+</script>
+</body>
+</html>

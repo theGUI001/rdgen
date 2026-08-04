@@ -1,0 +1,201 @@
+name: Docker Custom Client Generator
+
+# Unified, container-based replacement for the per-platform generator-*.yml
+# workflows. Instead of installing the whole toolchain on the runner every time,
+# it pulls a prebuilt builder image from GHCR (see builder-images.yml) and runs
+# the build inside a container. One dispatch can target several platforms at
+# once via the `platforms` input, which is what powers the "schedule builds for
+# multiple OSes" view in the rdgen app.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'RustDesk version to build (e.g. 1.4.9 or master)'
+        required: true
+        default: 'master'
+        type: string
+      platforms:
+        description: 'Comma separated platforms: linux,android,windows'
+        required: true
+        default: 'linux'
+        type: string
+      zip_url:
+        description: 'JSON {"url","file"} pointing at the encrypted secrets zip'
+        required: true
+        default: ''
+        type: string
+      image_tag:
+        description: 'Builder image tag to use'
+        required: false
+        default: 'latest'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_TAG: ${{ inputs.image_tag }}
+
+jobs:
+  # CI kill-switch. Every build job depends (directly or transitively) on these
+  # two root jobs, and both refuse to run unless the repository variable
+  # RDGEN_ENABLE_CI is explicitly set to 'true'. With it unset (the default,
+  # e.g. on a public fork) this workflow does nothing even if dispatched, so no
+  # one can burn your Actions minutes. To go fully local, also disable Actions
+  # in the repo settings — see docs/BUILDS.md. To re-enable CI builds, set the
+  # variable: Settings -> Secrets and variables -> Actions -> Variables.
+
+  # Fetch the encrypted secrets zip once and share it with the build jobs.
+  setup:
+    if: ${{ vars.RDGEN_ENABLE_CI == 'true' }}
+    uses: ./.github/workflows/fetch-encrypted-secrets.yml
+    with:
+      zip_url_json: ${{ inputs.zip_url }}
+
+  # Expand the comma list into a JSON matrix, dropping platforms that cannot be
+  # built in Docker so the caller gets a clear per-platform result.
+  plan:
+    if: ${{ vars.RDGEN_ENABLE_CI == 'true' }}
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      has_jobs: ${{ steps.build.outputs.has_jobs }}
+    steps:
+      - id: build
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          requested = "${{ inputs.platforms }}".split(",")
+          runners = {
+              "linux":   "ubuntu-latest",
+              "android": "ubuntu-latest",
+              "windows": "windows-2022",
+          }
+          include = []
+          for p in requested:
+              p = p.strip()
+              if not p:
+                  continue
+              if p in ("macos", "ios"):
+                  print(f"::warning::{p} cannot be built in Docker (needs a macOS host); skipping")
+                  continue
+              if p not in runners:
+                  print(f"::warning::unknown platform {p}; skipping")
+                  continue
+              include.append({"platform": p, "os": runners[p]})
+          print("matrix=" + json.dumps({"include": include}))
+          print("has_jobs=" + ("true" if include else "false"))
+          PY
+
+  build:
+    needs: [setup, plan]
+    if: needs.plan.outputs.has_jobs == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: encrypted-secrets-zip
+
+      - name: Load Secrets
+        uses: ./.github/actions/decrypt-secrets
+        with:
+          zip_password: ${{ secrets.ZIP_PASSWORD }}
+
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          large-packages: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Assemble build.json from the decrypted env values. The decrypt-secrets
+      # action already exported every secret key into $GITHUB_ENV.
+      - name: Assemble build config
+        shell: bash
+        env:
+          RD_VERSION: ${{ inputs.version }}
+          RD_PLATFORM: ${{ matrix.platform }}
+          RD_UPLOAD_URL: ${{ secrets.GENURL }}/save_custom_client
+          RD_STATUS_URL: ${{ secrets.GENURL }}/updategh
+        run: |
+          python3 - <<'PY'
+          import json, os
+          keys = [
+              "server", "key", "apiServer", "custom", "uuid", "appname",
+              "compname", "androidappid", "urlLink", "downloadLink",
+              "filename", "delayFix", "xOffline", "hidecm",
+              "removeNewVersionNotif", "rdgen", "token",
+              "iconlink_url", "iconlink_uuid", "iconlink_file",
+              "logolink_url", "logolink_uuid", "logolink_file",
+              "privacylink_url", "privacylink_uuid", "privacylink_file",
+          ]
+          cfg = {k: os.environ.get(k, "") for k in keys if os.environ.get(k) not in (None, "")}
+          cfg["version"] = os.environ["RD_VERSION"]
+          cfg["platform"] = os.environ["RD_PLATFORM"]
+          # Only wire the upload/status callbacks for real rdgen dispatches.
+          if os.environ.get("rdgen") == "true":
+              cfg["upload_url"] = os.environ["RD_UPLOAD_URL"]
+              cfg["status_url"] = os.environ["RD_STATUS_URL"]
+          elif os.environ.get("apiServer"):
+              cfg["upload_url"] = os.environ["apiServer"] + "/api/save_custom_client"
+              cfg["status_url"] = os.environ["apiServer"] + "/api/updategh"
+          os.makedirs("build_ctx/output", exist_ok=True)
+          with open("build_ctx/build.json", "w") as fh:
+              json.dump(cfg, fh)
+          print("wrote build.json for platform", cfg["platform"])
+          PY
+
+      - name: Run containerised build (Linux/Android)
+        if: runner.os == 'Linux'
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/rdgen-${{ matrix.platform }}-builder:${IMAGE_TAG:-latest}"
+          IMAGE="$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')"
+          docker pull "$IMAGE"
+          docker run --rm \
+            -v "${{ github.workspace }}/build_ctx/build.json:/work/build.json:ro" \
+            -v "${{ github.workspace }}/build_ctx/output:/work/output" \
+            "$IMAGE"
+
+      - name: Run containerised build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $image = "ghcr.io/${{ github.repository_owner }}/rdgen-windows-builder:$($env:IMAGE_TAG)".ToLower()
+          docker pull $image
+          docker run --rm `
+            -v "${{ github.workspace }}/build_ctx/build.json:C:/work/build.json:ro" `
+            -v "${{ github.workspace }}/build_ctx/output:C:/work/output" `
+            $image
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-${{ matrix.platform }}
+          path: build_ctx/output/**
+          if-no-files-found: warn
+
+  cleanup:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Delete secrets artifact
+        uses: geekyeggo/delete-artifact@v5
+        continue-on-error: true
+        with:
+          name: encrypted-secrets-zip
