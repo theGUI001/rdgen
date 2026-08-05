@@ -87,29 +87,89 @@ def build_custom_base64(params):
     decodedCustomJson = json.dumps(decodedCustom)
     return base64.b64encode(decodedCustomJson.encode('utf-8')).decode('ascii')
 
-def apply_company_name(compname, rustdesk_dir):
-    if not compname or compname == "Purslane Ltd":
+def replace_in_file(filepath, replacements):
+    if not os.path.isfile(filepath):
         return
-    files = [
-        os.path.join(rustdesk_dir, 'flutter', 'lib', 'desktop', 'pages', 'desktop_setting_page.dart'),
-        os.path.join(rustdesk_dir, 'Cargo.toml'),
-        os.path.join(rustdesk_dir, 'libs', 'portable', 'Cargo.toml'),
-        os.path.join(rustdesk_dir, 'src', 'ui', 'index.tis'),
-        os.path.join(rustdesk_dir, 'src', 'main.rs'),
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        orig = content
+        for old, new in replacements:
+            content = content.replace(old, new)
+        if content != orig:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"[gen_custom] Updated {filepath}")
+    except Exception as e:
+        print(f"[gen_custom] Error updating {filepath}: {e}")
+
+def apply_all_customisations(cfg, rustdesk_dir):
+    server = cfg.get('server') or cfg.get('serverIP') or 'rs-ny.rustdesk.com'
+    key = cfg.get('key') or 'OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw='
+    apiServer = cfg.get('apiServer') or f"{server}:21114"
+    appname = cfg.get('appname') or 'rustdesk'
+    compname = cfg.get('compname') or 'Purslane Ltd'
+
+    # 1. Server, Key, and APP_NAME in libs/hbb_common/src/config.rs
+    hbb_config = os.path.join(rustdesk_dir, 'libs', 'hbb_common', 'src', 'config.rs')
+    repls = [
+        ("rs-ny.rustdesk.com", server),
+        ("OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=", key),
     ]
-    for fpath in files:
-        if os.path.isfile(fpath):
-            try:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                content = content.replace("Purslane Tech Pte. Ltd.", compname)
-                content = content.replace("Purslane Ltd.", compname)
-                content = content.replace("Purslane Ltd", compname)
-                with open(fpath, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                print(f"[gen_custom] Replaced company name in {fpath}")
-            except Exception as e:
-                print(f"[gen_custom] Error updating {fpath}: {e}")
+    if appname and appname.lower() != "rustdesk":
+        repls.append(('RwLock::new("RustDesk".to_owned())', f'RwLock::new("{appname}".to_owned())'))
+    replace_in_file(hbb_config, repls)
+
+    # 2. API Server in src/common.rs
+    src_common = os.path.join(rustdesk_dir, 'src', 'common.rs')
+    replace_in_file(src_common, [("https://admin.rustdesk.com", apiServer)])
+
+    # 3. App Name / Whitelabel across Cargo.toml, portable main.rs, lang files
+    if appname and appname.lower() != "rustdesk":
+        app_cargo = [
+            ('description = "RustDesk Remote Desktop"', f'description = "{appname}"'),
+            ('ProductName = "RustDesk"', f'ProductName = "{appname}"'),
+            ('FileDescription = "RustDesk Remote Desktop"', f'FileDescription = "{appname}"'),
+            ('OriginalFilename = "rustdesk.exe"', f'OriginalFilename = "{appname}.exe"'),
+        ]
+        replace_in_file(os.path.join(rustdesk_dir, 'Cargo.toml'), app_cargo)
+        replace_in_file(os.path.join(rustdesk_dir, 'libs', 'portable', 'Cargo.toml'), app_cargo)
+
+        portable_main = os.path.join(rustdesk_dir, 'libs', 'portable', 'src', 'main.rs')
+        replace_in_file(portable_main, [
+            ('const APP_PREFIX: &str = "rustdesk";', f'const APP_PREFIX: &str = "{appname.lower()}";'),
+            ('const APP_PREFIX: &str = "RustDesk";', f'const APP_PREFIX: &str = "{appname}";'),
+        ])
+
+        lang_dir = os.path.join(rustdesk_dir, 'src', 'lang')
+        if os.path.isdir(lang_dir):
+            for fname in os.listdir(lang_dir):
+                if fname.endswith('.rs'):
+                    replace_in_file(os.path.join(lang_dir, fname), [("RustDesk", appname)])
+
+    # 4. Company Name (compname)
+    if compname and compname != "Purslane Ltd":
+        comp_files = [
+            os.path.join(rustdesk_dir, 'flutter', 'lib', 'desktop', 'pages', 'desktop_setting_page.dart'),
+            os.path.join(rustdesk_dir, 'Cargo.toml'),
+            os.path.join(rustdesk_dir, 'libs', 'portable', 'Cargo.toml'),
+            os.path.join(rustdesk_dir, 'src', 'ui', 'index.tis'),
+            os.path.join(rustdesk_dir, 'src', 'main.rs'),
+        ]
+        for fpath in comp_files:
+            replace_in_file(fpath, [
+                ("Purslane Tech Pte. Ltd.", compname),
+                ("Purslane Ltd.", compname),
+                ("Purslane Ltd", compname),
+            ])
+
+    # 5. Connection delay fix if delayFix is enabled
+    delay_fix = cfg.get('delayFix', True)
+    if isinstance(delay_fix, str):
+        delay_fix = (delay_fix.lower() in ('true', 'on', '1', 'yes'))
+    if delay_fix:
+        client_rs = os.path.join(rustdesk_dir, 'src', 'client.rs')
+        replace_in_file(client_rs, [("!key.is_empty()", "false")])
 
 def main():
     if len(sys.argv) < 2:
@@ -122,9 +182,7 @@ def main():
 
     if len(sys.argv) >= 3:
         rustdesk_dir = sys.argv[2]
-        compname = cfg.get('compname', '')
-        if compname:
-            apply_company_name(compname, rustdesk_dir)
+        apply_all_customisations(cfg, rustdesk_dir)
 
     custom = cfg.get('custom', '')
     if not custom:
