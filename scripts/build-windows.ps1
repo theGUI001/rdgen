@@ -70,7 +70,7 @@ $MSBuildExe = Find-MSBuild
 Load-VsDevEnv
 
 if (-not (Test-Path $Config)) { throw "config not found: $Config" }
-$cfg = Get-Content $Config -Raw | ConvertFrom-Json
+$cfg = Get-Content $Config -Raw -Encoding UTF8 | ConvertFrom-Json
 
 function Cfg($name, $default) {
     if ($cfg.PSObject.Properties.Name -contains $name -and $null -ne $cfg.$name -and "$($cfg.$name)" -ne '') {
@@ -80,15 +80,23 @@ function Cfg($name, $default) {
 }
 
 $version      = Cfg 'version' 'master'
-$server       = Cfg 'server' 'rs-ny.rustdesk.com'
+$server       = Cfg 'server' (Cfg 'serverIP' 'rs-ny.rustdesk.com')
 $key          = Cfg 'key' 'OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw='
 $apiServer    = Cfg 'apiServer' "$server`:21114"
 $appname      = Cfg 'appname' 'rustdesk'
-$filename     = Cfg 'filename' 'rustdesk'
+$filename     = Cfg 'filename' (Cfg 'exename' 'rustdesk')
 $compname     = Cfg 'compname' 'Purslane Ltd'
 $urlLink      = Cfg 'urlLink' 'https://rustdesk.com'
 $downloadLink = Cfg 'downloadLink' 'https://rustdesk.com/download'
 $custom       = Cfg 'custom' ''
+if (-not $custom) {
+    Try-Step {
+        $genScript = Join-Path $PSScriptRoot 'gen_custom.py'
+        if (Test-Path $genScript) {
+            $custom = (python $genScript $Config).Trim()
+        }
+    }
+}
 $uuid         = Cfg 'uuid' 'local'
 $delayFix     = "$(Cfg 'delayFix' 'true')" -eq 'true'
 $removeNotif  = "$(Cfg 'removeNewVersionNotif' 'false')" -eq 'true'
@@ -149,12 +157,16 @@ $customizeSh = Join-Path $PSScriptRoot 'customize.sh'
 if (-not (Test-Path $customizeSh)) { $customizeSh = 'C:/rdgen/scripts/customize.sh' }
 if ($BashExe) {
     $shPath = ($customizeSh -replace '\\','/')
+    $env:LC_ALL = 'C.UTF-8'
+    $env:LANG = 'C.UTF-8'
     Try-Step { & $BashExe -lc "cd '$($Src -replace '\\','/')' && . '$shPath' && customize_common" }
 } else {
     Warn 'bash (Git for Windows) not found; applying minimal PowerShell fallbacks only'
-    Try-Step { (Get-Content ./libs/hbb_common/src/config.rs) -replace 'rs-ny.rustdesk.com', $server | Set-Content ./libs/hbb_common/src/config.rs }
-    Try-Step { (Get-Content ./libs/hbb_common/src/config.rs) -replace 'OeVuKk5nlHiXp\+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=', $key | Set-Content ./libs/hbb_common/src/config.rs }
+    Try-Step { (Get-Content ./libs/hbb_common/src/config.rs -Encoding UTF8) -replace 'rs-ny.rustdesk.com', $server | Set-Content ./libs/hbb_common/src/config.rs -Encoding UTF8 }
+    Try-Step { (Get-Content ./libs/hbb_common/src/config.rs -Encoding UTF8) -replace 'OeVuKk5nlHiXp\+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=', $key | Set-Content ./libs/hbb_common/src/config.rs -Encoding UTF8 }
 }
+
+Try-Step { python (Join-Path $PSScriptRoot 'gen_custom.py') $Config $Src }
 
 Report 'Processing custom icons'
 Try-Step { python (Join-Path $PSScriptRoot 'process_icons.py') $Config $Src }
@@ -188,7 +200,7 @@ if (Test-Path $overlayPorts) {
 
 # --- build ------------------------------------------------------------------
 Report 'Compiling RustDesk (this is the long part)'
-Set-Content -Path ./rustdesk_custom.txt -Value $custom -NoNewline
+Set-Content -Path ./rustdesk_custom.txt -Value $custom -NoNewline -Encoding UTF8
 python .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
 Move-Item -Force ./flutter/build/windows/x64/runner/Release ./rustdesk
 Copy-Item -Force ./rustdesk_custom.txt ./rustdesk/custom_.txt
@@ -200,7 +212,7 @@ if ($appname -ne 'rustdesk') {
 $exeName = if ($appname -ne 'rustdesk') { "$appname.exe" } else { 'rustdesk.exe' }
 
 Try-Step {
-    (Get-Content res/manifest.xml) | Where-Object { $_ -notmatch 'dpiAware' } | Set-Content res/manifest.xml
+    (Get-Content res/manifest.xml -Encoding UTF8) | Where-Object { $_ -notmatch 'dpiAware' } | Set-Content res/manifest.xml -Encoding UTF8
     Push-Location ./libs/portable
     pip install -r requirements.txt
     python ./generate.py -f ../../rustdesk/ -o . -e "../../rustdesk/$exeName"
