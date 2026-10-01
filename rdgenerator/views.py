@@ -19,6 +19,18 @@ from .models import GithubRun, BuildBatch, BuildJob
 from PIL import Image
 from urllib.parse import quote
 
+# get_png, download and save_custom_client build file paths from request values;
+# only accept a UUID and a plain file name so "../" or absolute paths cannot escape png/ and exe/.
+_UUID_RE = re.compile(r'^[0-9a-fA-F-]{36}$')
+_NAME_RE = re.compile(r'^[\w.-]+$')
+
+def _safe_parts(uuid_val, filename):
+    if not uuid_val or not _UUID_RE.match(uuid_val):
+        return False
+    if filename is not None and (not _NAME_RE.match(filename) or filename.startswith('.')):
+        return False
+    return True
+
 
 def generate_custom_client(params, full_url, engine='native'):
     """
@@ -44,12 +56,15 @@ def generate_custom_client(params, full_url, engine='native'):
     hidecm = params.get('hidecm', False)
     removeNewVersionNotif = params.get('removeNewVersionNotif', False)
     server = params.get('serverIP', '')
+    serverPort = params.get('serverPort', '')
     key = params.get('key', '')
     apiServer = params.get('apiServer', '')
     urlLink = params.get('urlLink', '')
     downloadLink = params.get('downloadLink', '')
     if not server:
         server = 'rs-ny.rustdesk.com' #default rustdesk server
+    if not serverPort:
+        serverPort = '21116' #default rustdesk rendezvous port
     if not key:
         key = 'OeVuKk5nlHiXp+APNn0Y3pC1Iwpwn44JGqrQCsWqmBw=' #default rustdesk key
     if not apiServer:
@@ -165,6 +180,7 @@ def generate_custom_client(params, full_url, engine='native'):
     decodedCustom['enable-lan-discovery'] = 'N' if denyLan else 'Y'
     #decodedCustom['direct-server'] = 'Y' if enableDirectIP else 'N'
     decodedCustom['allow-auto-disconnect'] = 'Y' if autoClose else 'N'
+
     if permissionsDorO == "default":
         decodedCustom['default-settings']['access-mode'] = permissionsType
         decodedCustom['default-settings']['enable-keyboard'] = 'Y' if enableKeyboard else 'N'
@@ -184,6 +200,8 @@ def generate_custom_client(params, full_url, engine='native'):
         decodedCustom['default-settings']['enable-remote-printer'] = 'Y' if enablePrinter else 'N'
         decodedCustom['default-settings']['enable-camera'] = 'Y' if enableCamera else 'N'
         decodedCustom['default-settings']['enable-terminal'] = 'Y' if enableTerminal else 'N'
+        
+
     else:
         decodedCustom['override-settings']['access-mode'] = permissionsType
         decodedCustom['override-settings']['enable-keyboard'] = 'Y' if enableKeyboard else 'N'
@@ -203,6 +221,9 @@ def generate_custom_client(params, full_url, engine='native'):
         decodedCustom['override-settings']['enable-remote-printer'] = 'Y' if enablePrinter else 'N'
         decodedCustom['override-settings']['enable-camera'] = 'Y' if enableCamera else 'N'
         decodedCustom['override-settings']['enable-terminal'] = 'Y' if enableTerminal else 'N'
+        if direction == 'incoming':
+            decodedCustom['override-settings']['custom-rendezvous-server'] = server
+            decodedCustom['override-settings']['api-server'] = apiServer
 
     if defaultManual:
         for line in defaultManual.splitlines():
@@ -281,6 +302,7 @@ def generate_custom_client(params, full_url, engine='native'):
 
     inputs_raw = {
         "server":server,
+        "serverPort":serverPort,
         "key":key,
         "apiServer":apiServer,
         "custom":encodedCustom,
@@ -656,11 +678,9 @@ def check_for_file(request):
 def download(request):
     filename = request.GET['filename']
     uuid = request.GET['uuid']
-    # Guard against path traversal and only serve from exe/<uuid>/.
-    base_dir = os.path.abspath(os.path.join('exe', uuid))
-    file_path = os.path.abspath(os.path.join(base_dir, filename))
-    if not file_path.startswith(base_dir + os.sep):
+    if not _safe_parts(uuid, filename):
         return HttpResponseForbidden("Invalid filename")
+    file_path = os.path.join('exe', uuid, filename)
     if not os.path.isfile(file_path):
         from django.http import Http404
         raise Http404("This artifact was not produced by the build")
@@ -689,7 +709,8 @@ def local_log(request):
 def get_png(request):
     filename = request.GET['filename']
     uuid = request.GET['uuid']
-    #filename = filename+".exe"
+    if not _safe_parts(uuid, filename):
+        return HttpResponseForbidden("Invalid filename")
     file_path = os.path.join('png',uuid,filename)
     with open(file_path, 'rb') as file:
         response = HttpResponse(file, headers={
@@ -812,6 +833,8 @@ def save_png(file, uuid, domain, name):
 def save_custom_client(request):
     file = request.FILES['file']
     myuuid = request.POST.get('uuid')
+    if not _safe_parts(myuuid, file.name):
+        return HttpResponseForbidden("Invalid filename")
     file_save_path = "exe/%s/%s" % (myuuid, file.name)
     Path("exe/%s" % myuuid).mkdir(parents=True, exist_ok=True)
     with open(file_save_path, "wb+") as f:
